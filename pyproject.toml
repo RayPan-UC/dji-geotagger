@@ -1,0 +1,27 @@
+[project]
+name = "dji-geotagger"
+version = "0.1.0"
+description = "A precise PPK + MRK-based geotagging tool for DJI RTK drones"
+authors = [{name = "Ray Pan", email = "hungwei.pan2@ucalgary.ca"}]
+license = {text = "BSD-2-Clause"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "pandas",
+  "numpy",
+  "pyproj",
+  "exifread",
+  "tqdm"
+]
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: GIS",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"

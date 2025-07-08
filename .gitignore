@@ -1,0 +1,28 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.so
+
+# others
+others/
+
+# Jupyter / temporary files
+*.ipynb_checkpoints
+*.log
+
+# CSV, images, MRK, POS outputs
+*.csv
+*.jpg
+*.jpeg
+*.mrk
+*.pos
+*.bin
+*.dat
+
+# VSCode
+.vscode/
+
+# Windows / Dropbox system files
+Thumbs.db
+desktop.ini
+.DS_Store
