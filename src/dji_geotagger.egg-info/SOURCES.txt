@@ -18,3 +18,4 @@ src/dji_geotagger/ppk/ephemeris_downloader.py
 src/dji_geotagger/ppk/ppk_solver.py
 src/dji_geotagger/ppk/raw_converter.py
 src/dji_geotagger/tools/tools.py
+src/temp/__init__.py

@@ -6,8 +6,8 @@ __pycache__/
 # others
 others/
 temp/
-dji_geotagger-0.1.2/
 dist/
+
 
 # Jupyter / temporary files
 *.ipynb_checkpoints
