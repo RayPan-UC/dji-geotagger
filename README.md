@@ -16,7 +16,7 @@ This Python library enables centimeter-level camera geotagging by combining PPK 
 ## Installation
 
 ```bash
-git clone https://github.com/your_username/dji-geotagger.git
+git clone https://github.com/RayPan-UC/dji-geotagger.git
 cd dji-geotagger
 pip install -r requirements.txt
 ```
