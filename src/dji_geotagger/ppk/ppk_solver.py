@@ -2,8 +2,8 @@ from pathlib import Path
 import subprocess
 from tqdm import tqdm
 import numpy as np
-from ppk.ephemeris_downloader import try_download_igs_data
-from core.PPP_sum_parser import sum_file_parser
+from dji_geotagger.ppk.ephemeris_downloader import try_download_igs_data
+from dji_geotagger.core.PPP_sum_parser import sum_file_parser
 
 def update_ant2_position(
     conf_file: Path,

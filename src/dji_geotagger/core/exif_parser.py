@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from exiftool import ExifToolHelper
 from tqdm import tqdm
-from tools.tools import utc_to_gps
+from dji_geotagger.tools.tools import utc_to_gps
 
 def correct_dji_gimbal_lock(roll: float, pitch: float, yaw: float) -> tuple[float, float, float]:
     """

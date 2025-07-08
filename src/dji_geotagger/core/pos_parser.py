@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from numpy import sin, cos, arcsin, arctan2, sqrt, degrees, radians, sign, atan2, asin, pi
 from tqdm import tqdm
-from core.PPP_sum_parser import sum_file_parser
+from dji_geotagger.core.PPP_sum_parser import sum_file_parser
 
 
 def combine_all_pos(

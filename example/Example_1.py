@@ -1,11 +1,7 @@
 from pathlib import Path
 import datetime
-
-from ppk.raw_converter import raw_to_rinex_batch
-from ppk.ppk_solver import process_ppk
-from core.camera_pos_solver import load_and_compute_camera_positions
-from tools.tools import transform_coordinates, get_crs_igb20, clean_temp_dirs
 from pyproj import CRS
+from dji_geotagger import *
 
 # Set input directory (replace with your own)
 input_dir = Path("example_data/site1")

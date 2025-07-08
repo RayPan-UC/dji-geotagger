@@ -5,7 +5,7 @@ import requests
 import gzip
 import shutil
 import time
-from tools.tools import utc_to_gps
+from dji_geotagger.tools.tools import utc_to_gps
 
 
 def parse_obs_time_range(obs_file: Path) -> tuple[datetime, datetime]:

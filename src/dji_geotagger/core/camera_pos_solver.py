@@ -2,9 +2,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from core.mrk_parser import combine_all_mrk
-from core.exif_parser import combine_all_img_info
-from core.pos_parser import combine_all_pos
+from dji_geotagger.core.mrk_parser import combine_all_mrk
+from dji_geotagger.core.exif_parser import combine_all_img_info
+from dji_geotagger.core.pos_parser import combine_all_pos
 
 def match_img_by_mrk_nearest(df_img_info, df_mrk, tolerance=0.002):
     """

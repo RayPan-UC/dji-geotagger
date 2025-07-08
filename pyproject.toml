@@ -1,6 +1,6 @@
 [project]
 name = "dji-geotagger"
-version = "0.1.0"
+version = "0.1.6"
 description = "A precise PPK + MRK-based geotagging tool for DJI RTK drones"
 authors = [{name = "Ray Pan", email = "hungwei.pan2@ucalgary.ca"}]
 license = {text = "BSD-2-Clause"}
@@ -22,6 +22,12 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 
+[project.urls]
+"Homepage" = "https://github.com/RayPan-UC/dji-geotagger"
+
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
