@@ -1,6 +1,6 @@
 [project]
 name = "dji-geotagger"
-version = "0.2.1"
+version = "0.2.2"
 description = "A precise PPK + MRK-based geotagging tool for DJI RTK drones"
 authors = [{name = "Ray Pan", email = "hungwei.pan2@ucalgary.ca"}]
 license = {text = "BSD-2-Clause"}
@@ -12,7 +12,6 @@ dependencies = [
   "pandas",
   "numpy",
   "pyproj",
-  "exifread",
   "tqdm"
 ]
 
