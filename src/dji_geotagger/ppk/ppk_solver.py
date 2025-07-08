@@ -75,8 +75,10 @@ def process_ppk(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Check rnx2rtkp exists
-    if rnx2rtkp_not_exists(rnx2rtkp):
-        raise FileNotFoundError("rnx2rtkp.exe not found.")
+    if not rnx2rtkp.exists():
+        print("[ERROR] rnx2rtkp.exe not found.")
+        from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
+
 
     # If input sum file
     if override_base_from_sum_file:
@@ -140,21 +142,3 @@ def process_ppk(
     print("[NOTE] Although RTKLIB .pos file output labels coordinates as 'WGS84', the actual reference frame corresponds to the IGS20 realization (i.e., aligned with ITRF), as determined by the SP3/CLK products used.")
 
     return output_dir
-
-def rnx2rtkp_not_exists(rnx2rtkp_path: Path):
-    """
-    Check if rnx2rtkp.exe exists at the specified path.
-    If not found, print an instructional message for the user.
-    """
-    if not rnx2rtkp_path.exists():
-        print("[ERROR] rnx2rtkp.exe not found.")
-        print(f"Expected location: {rnx2rtkp_path.resolve()}")
-        print("\nTo use this tool, please download RTKLIB from the official site:")
-        print("  🔗 https://www.rtklib.com/")
-        print("\nAfter downloading, place 'rnx2rtkp.exe' in the following folder:")
-        print(f" 📁 {rnx2rtkp_path.parent.resolve()}")
-        print("\n⚠️ If your antivirus software blocks the executable,")
-        print("please add an exception or trust rule for 'rnx2rtkp.exe' manually.")
-        print("RTKLIB is an open-source, well-known GNSS processing toolkit.")
-        return True
-    return False

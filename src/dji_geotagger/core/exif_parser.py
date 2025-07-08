@@ -2,7 +2,7 @@ from pathlib import Path
 import datetime as dt
 import pandas as pd
 import numpy as np
-from exiftool import ExifToolHelper
+from PIL import Image
 from tqdm import tqdm
 from dji_geotagger.tools.tools import utc_to_gps
 
@@ -25,7 +25,6 @@ def correct_dji_gimbal_lock(roll: float, pitch: float, yaw: float) -> tuple[floa
 
 def combine_all_img_info(
     photo_folder: Path,
-    exiftool_path: Path = Path(r"tools\exiftool-13.31_64\exiftool(-k).exe")
 ) -> pd.DataFrame:
     """
     Extracts image capture metadata from DJI images using ExifTool.
@@ -50,32 +49,42 @@ def combine_all_img_info(
     image_list = list(photo_folder.rglob("*.JPG")) + list(photo_folder.rglob("*.JPEG"))
     image_list = sorted(image_list)
     print(f"[INFO] {len(image_list)} images were found in {photo_folder}")
-    
+    """
     metadata_list = []
     with ExifToolHelper(executable=exiftool_path) as et:
         for img_path in tqdm(image_list, desc="[INFO] Gathering image metadata (EXIF/XMP)"):
             metadata = et.get_metadata(str(img_path))
             metadata_list.extend(metadata)
+    """
+
 
     records = []
-    for metadata in metadata_list:
+    for img_path in tqdm(image_list, desc="[INFO] Gathering image metadata (EXIF/XMP via Pillow)"):
         try:
-            # Parse UTC time string to datetime
-            utc_str = metadata.get("XMP:UTCAtExposure")
-            dt_obj = dt.datetime.strptime(utc_str, "%Y:%m:%d %H:%M:%S.%f")
+            with Image.open(img_path) as im:
+                exif_data = im.getexif()
+                xmp_data = im.getxmp()
+
+            if xmp_data is None:
+                raise ValueError("No XMP metadata found")
+            
+            desc = xmp_data['xmpmeta']['RDF']['Description']
+
+            utc_str = desc["UTCAtExposure"]
+            dt_obj = dt.datetime.strptime(utc_str, "%Y-%m-%dT%H:%M:%S.%f")
 
             # Convert UTC → GPS time
             yyyy, doy, gps_week, gps_day, gps_tow = utc_to_gps(dt_obj)
 
             # Raw flight attitude (aircraft)
-            flight_roll  = float(metadata.get("XMP:FlightRollDegree"))
-            flight_pitch = float(metadata.get("XMP:FlightPitchDegree"))
-            flight_yaw   = float(metadata.get("XMP:FlightYawDegree"))
+            flight_roll  = float(desc["FlightRollDegree"])
+            flight_pitch = float(desc["FlightPitchDegree"])
+            flight_yaw   = float(desc["FlightYawDegree"])
 
             # Gimbal attitude (camera)
-            gimbal_roll  = float(metadata.get("XMP:GimbalRollDegree"))
-            gimbal_pitch = float(metadata.get("XMP:GimbalPitchDegree"))
-            gimbal_yaw   = float(metadata.get("XMP:GimbalYawDegree"))
+            gimbal_roll  = float(desc["GimbalRollDegree"])
+            gimbal_pitch = float(desc["GimbalPitchDegree"])
+            gimbal_yaw   = float(desc["GimbalYawDegree"])
 
             # correct DJI gimbal lock problem
             roll, pitch, yaw = correct_dji_gimbal_lock(gimbal_roll, gimbal_pitch, gimbal_yaw)
@@ -88,13 +97,13 @@ def combine_all_img_info(
 
 
             records.append({
-                "FileName":               metadata.get('File:FileName'),
+                "FileName":               img_path.name,
                 "UTCAtExposure":          utc_str,
                 "GPS_week":               gps_week,
                 "GPS_time":               gps_tow,
-                "GPSLatitude":            float(metadata.get("XMP:GPSLatitude")),
-                "GPSLongitude":           float(metadata.get("XMP:GPSLongitude")),
-                "AbsoluteAltitude":       float(metadata.get("XMP:AbsoluteAltitude")),
+                "GPSLatitude":            float(desc["GpsLatitude"]),
+                "GPSLongitude":           float(desc["GpsLongitude"]),
+                "AbsoluteAltitude":       float(desc["AbsoluteAltitude"]),
                 "flightRoll":             flight_roll,
                 "flightPitch":            flight_pitch,
                 "flightYaw":              flight_yaw,
@@ -107,7 +116,7 @@ def combine_all_img_info(
             })
 
         except Exception as e:
-            print(f"[WARNING] Skipped {metadata.get('File:FileName')} due to error: {e}")
+            print(f"[WARNING] Skipped {img_path.name} due to error: {e}")
             continue
 
     df = pd.DataFrame(records)

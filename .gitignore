@@ -7,7 +7,7 @@ __pycache__/
 others/
 temp/
 dist/
-
+src/dji_geotagger.egg-info/
 
 # Jupyter / temporary files
 *.ipynb_checkpoints

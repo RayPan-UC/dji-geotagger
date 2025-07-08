@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: dji-geotagger
-Version: 0.1.8
+Version: 0.1.9
 Summary: A precise PPK + MRK-based geotagging tool for DJI RTK drones
 Author-email: Ray Pan <hungwei.pan2@ucalgary.ca>
 License: BSD-2-Clause
