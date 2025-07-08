@@ -13,6 +13,8 @@ Classifier: Topic :: Scientific/Engineering :: Image Recognition
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 License-File: LICENSE
+Requires-Dist: pillow
+Requires-Dist: defusedxml
 Requires-Dist: pandas
 Requires-Dist: numpy
 Requires-Dist: pyproj

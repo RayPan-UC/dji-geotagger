@@ -1,3 +1,5 @@
+pillow
+defusedxml
 pandas
 numpy
 pyproj
