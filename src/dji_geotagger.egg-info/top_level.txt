@@ -1,2 +1,0 @@
-dji_geotagger
-temp

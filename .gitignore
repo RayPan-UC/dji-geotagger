@@ -4,10 +4,10 @@ __pycache__/
 *.so
 
 # others
-others/
-temp/
-dist/
-src/dji_geotagger.egg-info/
+**/others/
+**/temp/
+**/dist/
+*.egg-info/
 
 # Jupyter / temporary files
 *.ipynb_checkpoints
