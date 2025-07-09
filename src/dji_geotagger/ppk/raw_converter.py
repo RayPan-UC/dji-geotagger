@@ -1,7 +1,7 @@
 from pathlib import Path
 import subprocess
 from datetime import datetime
-
+from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
 
 def extract_datetime_from_filename(file: Path) -> datetime:
     """
@@ -35,8 +35,6 @@ def raw_to_rinex_single(
 
     
     if not convbin_path.exists():
-        print("[ERROR] convbin.exe not found.")
-        from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
         download_RTKLIB_instruction(convbin_path)
 
     rinex_dir = output_dir / f"rinex_{type}"
@@ -83,8 +81,6 @@ def raw_to_rinex_batch(
         return
     
     if not convbin_path.exists():
-        print("[ERROR] convbin.exe not found.")
-        from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
         download_RTKLIB_instruction(convbin_path)
 
     print(f"[INFO] Found {len(matched_files)} files for type: {type}")
