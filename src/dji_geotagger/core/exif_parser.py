@@ -20,7 +20,7 @@ def correct_dji_gimbal_lock(roll: float, pitch: float, yaw: float) -> tuple[floa
     """
     if abs(pitch) >= np.pi / 2 - 0.05:
         roll = -roll
-        yaw = (yaw + np.pi) % (2 * np.pi)  # Wrap to [0, 2π]
+        yaw = yaw # ignore gimbal yaw (will be replace by flight yaw)
     return roll, pitch, yaw
 
 def combine_all_img_info(
@@ -92,7 +92,7 @@ def combine_all_img_info(
             # Correct DJI-style pitch/roll/yaw for photogrammetry (nadir = pitch +90°)
             roll = roll
             pitch = pitch + 90  # DJI defines -90° as nadir
-            yaw = yaw           # DJI yaw is typically correct
+            yaw = flight_yaw    # DJI flight yaw is typically correct
 
 
 

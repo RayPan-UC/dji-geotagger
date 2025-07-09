@@ -32,19 +32,34 @@ def raw_to_rinex_single(
     antenna_height_in_meter: float= 0.0,
     type: str = "base",
     convbin: Path = None
-    ):
+    ) -> Path:
+    """
+        Convert a single raw GNSS log file (e.g., .dat, .bin) to RINEX using RTKLIB convbin.exe.
 
-    
+        For base station logs, returns the first generated (.obs, .nav) file pair.
+        For rover logs, returns the RINEX output folder path.
 
+        Parameters:
+            input_path (Path): Path to raw GNSS log file (e.g., DJI .dat or .bin)
+            output_dir (Path, optional): Output directory to store RINEX files. Default is "temp"
+            antenna_height_in_meter (float, optional): Antenna height in meters. Default is 0.0
+            type (str, optional): Either "base" or "rover". Affects output subfolder and return type.
+            convbin (Path, optional): Path to RTKLIB convbin.exe. Auto-detected if not provided.
+
+        Returns:
+            Union[tuple[Path, Path], Path]:
+                - (obs_path, nav_path) if type == "base"
+                - Path to RINEX output folder if type == "rover"
+    """
     # Check convbin.exe
     if convbin is None:
-        convbin = get_rtklib_executable("rnx2rtkp")
+        convbin = get_rtklib_executable("convbin")
 
     if not convbin.exists():
         success = download_RTKLIB_instruction(convbin)
         if success:
             # After download, recheck
-            convbin = get_rtklib_executable("rnx2rtkp")
+            convbin = get_rtklib_executable("convbin")
             if not convbin.exists():
                 raise FileNotFoundError(f"[FATAL] RTKLIB tool still not found: {convbin}")
     rinex_dir = output_dir / f"rinex_{type}"
@@ -72,9 +87,25 @@ def raw_to_rinex_single(
     print(f"[INFO] Converting: {input_path.name} → {type}")
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"[INFO] ✓ Converted: {obs_path.name}")
+        print(f"[INFO] ✓ Converted: {obs_path.name}. Output: {rinex_dir}")
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"[ERROR] Failed to convert {input_path}") from e
+    
+    if type == "base":
+        base_export_hint()
+        rinex_dir = output_dir / "rinex_base"
+        obs_list = list(rinex_dir.glob("*.obs"))
+        nav_list = list(rinex_dir.glob("*.nav"))
+
+        if not obs_list or not nav_list:
+            print(f"[WARNING] No .obs/.nav file found in {rinex_dir}")
+            return None
+
+        return obs_list[0], nav_list[0]
+    
+    else:
+        return output_dir / "rinex_rover"
+
 
 
 def raw_to_rinex_batch(
@@ -82,9 +113,28 @@ def raw_to_rinex_batch(
     input_dir: Path,
     output_dir: Path = Path("temp"),
     antenna_height_in_meter: float = 0.0,
-    type: str = "base",
-    convbin: Path = None
-):
+    type: str = "rover",
+    convbin: Path = None,
+) -> Path:
+    """
+    Batch convert raw GNSS files (e.g., .dat, .bin) to RINEX using RTKLIB convbin.exe.
+
+    For base station logs, returns the first converted (.obs, .nav) file pair.
+    For rover logs, returns the output RINEX folder path.
+
+    Parameters:
+        keywords (list[str]): Keywords to identify raw files (e.g., ["DRTK", ".dat"]).
+        input_dir (Path): Path to directory containing raw files.
+        output_dir (Path, optional): Output directory to store RINEX files. Default is "temp".
+        antenna_height_in_meter (float, optional): Antenna height in meters. Default is 0.0.
+        type (str, optional): Either "base" or "rover". Affects output folder and return type.
+        convbin (Path, optional): Path to RTKLIB convbin.exe. Auto-detected if not provided.
+
+    Returns:
+        Union[tuple[Path, Path], Path]:
+            - (obs_path, nav_path) if type == "base"
+            - Path to RINEX output folder if type == "rover"
+    """
     matched_files = find_raw_files_by_keywords(input_dir, keywords)
     if not matched_files:
         print("[INFO] No matching files found.")
@@ -92,13 +142,13 @@ def raw_to_rinex_batch(
     
     # Check convbin.exe
     if convbin is None:
-        convbin = get_rtklib_executable("rnx2rtkp")
+        convbin = get_rtklib_executable("convbin")
 
     if not convbin.exists():
         success = download_RTKLIB_instruction(convbin)
         if success:
             # After download, recheck
-            convbin = get_rtklib_executable("rnx2rtkp")
+            convbin = get_rtklib_executable("convbin")
             if not convbin.exists():
                 raise FileNotFoundError(f"[FATAL] RTKLIB tool still not found: {convbin}")
 
@@ -108,10 +158,28 @@ def raw_to_rinex_batch(
             raw_to_rinex_single(f, output_dir, antenna_height_in_meter, type, convbin)
         except Exception as e:
             print(f"[ERROR] {f.name}: {e}")
+    
 
 
     if type == "base":
-        print("""
+        base_export_hint()
+        rinex_dir = output_dir / "rinex_base"
+        obs_list = list(rinex_dir.glob("*.obs"))
+        nav_list = list(rinex_dir.glob("*.nav"))
+
+        if not obs_list or not nav_list:
+            print(f"[WARNING] No .obs/.nav file found in {rinex_dir}")
+            return None
+
+        return obs_list[0], nav_list[0]
+    
+    else:
+        return output_dir / "rinex_rover"
+    
+    
+
+def base_export_hint():
+            print("""
 [INFO] Base station RINEX files have been exported.
 [HINT] You can now submit the RINEX file to CSRS-PPP for precise positioning:
        
@@ -126,4 +194,3 @@ def raw_to_rinex_batch(
         
         Processing takes ~5–30 minutes depending on data length.
               """)
-

@@ -56,17 +56,20 @@ def process_ppk(
             rnx2rtkp = get_rtklib_executable("rnx2rtkp")
             if not rnx2rtkp.exists():
                 raise FileNotFoundError(f"[FATAL] RTKLIB tool still not found: {rnx2rtkp}")
-
-    # Parse .sum if provided
+            
+    # Handle base station configuration
     if override_base_from_sum_file:
+        # Priority: Use PPP .sum file for base coordinates
         X, Y, Z, lat, lon, hgt, cor_sys, cov_ecef = sum_file_parser(override_base_from_sum_file)
 
         if cor_sys not in ["IGb20", "IGS20", "ITRF2020", "IGS14", "ITRF2014"]:
-            raise ValueError(f"[ERROR] Unexpected base coordinate system '{cor_sys}'")
+            raise ValueError(f"[ERROR] Unexpected coordinate system '{cor_sys}' in sum file.")
 
-        print(f"[INFO] Parsed base ECEF: ({X:.3f}, {Y:.3f}, {Z:.3f}) | LLH: ({np.degrees(lat):.3f}°, {np.degrees(lon):.3f}°, {hgt:.3f} m)")
+        print(f"[INFO] Base ECEF (from .sum): ({X:.3f}, {Y:.3f}, {Z:.3f})")
+        print(f"[INFO] Base LLH: ({np.degrees(lat):.5f}°, {np.degrees(lon):.5f}°, {hgt:.3f} m)")
         print(f"[INFO] Base RMS error (1σ): {np.sqrt(np.diag(cov_ecef))}")
 
+        # Use coordinates from sum file unless overridden
         base_conf = {
             "ant2-postype": "xyz",
             "ant2-pos1": f"{X:.4f}",
@@ -74,14 +77,22 @@ def process_ppk(
             "ant2-pos3": f"{Z:.4f}"
         }
 
+        # Merge additional user config (ignore ant2-posX overrides)
         if conf_override:
-            base_conf.update(conf_override)
+            for key, val in conf_override.items():
+                if not key.startswith("ant2-pos"):
+                    base_conf[key] = val
+
         conf_file = import_rtklib_config(base_conf)
+
     else:
-        # without sum file -> default + override
+        # No sum file: use provided overrides only
+        if conf_override is None:
+            raise ValueError("[ERROR] No base position provided. Either set `override_base_from_sum_file` or `conf_override` with ant2-pos1/2/3.")
+
+        print("[INFO] Using manual base coordinates from conf_override.")
         conf_file = import_rtklib_config(conf_override)
-    # update conf file
-    print(f"[INFO] Updated ant2 position in: {conf_file.name}")
+    
 
     # Download ephemeris data (.clk and .sp3)
     if not ephemeris_files:
@@ -91,6 +102,7 @@ def process_ppk(
             print("[INFO] You can manually download them from:")
             print("        https://igs.org/products/#orbits_clocks")
             print("        (Look under FINAL or RAPID products for your observation date)")
+            print("        (For GPS week and date, you can check: https://webapp.csrs-scrs.nrcan-rncan.gc.ca/geod/tools-outils/calendr.php)")
             return
     
     # Print rover file count

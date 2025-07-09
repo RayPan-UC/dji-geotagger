@@ -20,8 +20,8 @@ def import_rtklib_config(user_override: dict = None, output_path: Path = None) -
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8", newline="\n") as f:
         for key, val in config.items():
-            f.write(f"{key:<20} = {val}\n")
+            f.write(f"{key}={val}\n")
 
     return output_path
