@@ -130,5 +130,5 @@ This project is licensed under the BSD 2-Clause (see LICENSE for details).
 
 ## Acknowledgments
 
-- Developed at the University of Calgary, ASPEN Lab
-- Inspired by real-world field workflows using DJI P1 + Hemisphere + CSRS PPP
+- Developed at the University of Calgary, Applied Geospatial Research Group ([appliedgrg.ca](https://www.appliedgrg.ca))
+- Inspired by real-world field workflows involving DJI M300 RTK + Zenmuse P1, Hemisphere base stations, and CSRS-PPP post-processing
