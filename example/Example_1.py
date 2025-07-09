@@ -27,6 +27,7 @@ process_ppk(
     base_obs=Path("temp/rinex_base/base.obs"),
     base_nav=Path("temp/rinex_base/base.nav"),
     rover_dir=Path("temp/rinex_rover"),
+    conf_override={"pos1-elmask": "10"},
     override_base_from_sum_file=Path("example_data/site1/base_data/base.sum"),
     output_dir=Path("temp/ppk_result")
 )

@@ -30,12 +30,14 @@ def raw_to_rinex_single(
     output_dir: Path= Path("temp"),
     antenna_height_in_meter: float= 0.0,
     type: str = "base",
-    convbin_path: Path = Path(r"tools\RTKLIB\bin\convbin.exe")
+    convbin_path: Path = Path(r"tools\RTKLIB_bin-rtklib_2.4.3\bin\convbin.exe")
     ):
 
     
-    if convbin_not_exists(convbin_path):
-        raise FileNotFoundError("convbin.exe not found.")
+    if not convbin_path.exists():
+        print("[ERROR] convbin.exe not found.")
+        from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
+        download_RTKLIB_instruction(convbin_path)
 
     rinex_dir = output_dir / f"rinex_{type}"
     rinex_dir.mkdir(parents=True, exist_ok=True)
@@ -72,46 +74,41 @@ def raw_to_rinex_batch(
     input_dir: Path,
     output_dir: Path = Path("temp"),
     antenna_height_in_meter: float = 0.0,
-    type: str = "base"
+    type: str = "base",
+    convbin_path: Path = Path(r"tools\RTKLIB_bin-rtklib_2.4.3\bin\convbin.exe")
 ):
     matched_files = find_raw_files_by_keywords(input_dir, keywords)
     if not matched_files:
         print("[INFO] No matching files found.")
         return
+    
+    if not convbin_path.exists():
+        print("[ERROR] convbin.exe not found.")
+        from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
+        download_RTKLIB_instruction(convbin_path)
 
     print(f"[INFO] Found {len(matched_files)} files for type: {type}")
     for f in matched_files:
         try:
-            raw_to_rinex_single(f, output_dir, antenna_height_in_meter, type)
+            raw_to_rinex_single(f, output_dir, antenna_height_in_meter, type, convbin_path)
         except Exception as e:
             print(f"[ERROR] {f.name}: {e}")
 
 
     if type == "base":
-        print("[INFO] Base station RINEX files have been exported.")
-        print("[HINT] You can now submit the RINEX file to CSRS-PPP for precise positioning:")
-        print("       🔗 https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php")
-        print("       1. Upload the `.obs` file")
-        print("       2. Enter your email address to receive results")
-        print("       ⚠️ Recommended options:")
-        print("          - Positioning mode: Static")
-        print("          - Coordinate system: ITRF")
-        print("       Processing takes ~5–30 minutes depending on data length.")
-    
-def convbin_not_exists(convbin_path: Path):
-    """
-    Check if convbin.exe exists at the specified path.
-    If not found, print an instructional message for the user.
-    """
-    if not convbin_path.exists():
-        print("[ERROR] convbin.exe not found.")
-        print(f"Expected location: {convbin_path.resolve()}")
-        print("\nTo use this tool, please download RTKLIB from the official site:")
-        print("  🔗 https://www.rtklib.com/")
-        print("\nAfter downloading, place 'convbin.exe' in the following folder:")
-        print(f" 📁 {convbin_path.parent.resolve()}")
-        print("\n⚠️ If your antivirus software blocks the executable,")
-        print("please add an exception or trust rule for 'convbin.exe' manually.")
-        print("RTKLIB is an open-source, well-known GNSS processing toolkit.")
-        return True
-    return False
+        print("""
+[INFO] Base station RINEX files have been exported.
+[HINT] You can now submit the RINEX file to CSRS-PPP for precise positioning:
+       
+        🔗 https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php
+              1. Upload the `.obs` file
+              2. Enter your email address to receive results
+
+        ⚠️ Recommended options:")
+                - Positioning mode: Static
+                - Coordinate system: ITRF
+        
+        
+        Processing takes ~5–30 minutes depending on data length.
+              """)
+

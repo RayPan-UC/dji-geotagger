@@ -4,95 +4,76 @@ from tqdm import tqdm
 import numpy as np
 from dji_geotagger.ppk.ephemeris_downloader import try_download_igs_data
 from dji_geotagger.core.PPP_sum_parser import sum_file_parser
-
-def update_ant2_position(
-    conf_file: Path,
-    postype: str = "xyz",  # "llh" or "xyz"
-    pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
-):
-    """
-    Update RTKLIB .conf file for ant2 (rover) position mode and coordinates.
-
-    Parameters:
-        conf_path (Path): Path to RTKLIB config (.conf) file.
-        postype (str): 'llh' or 'xyz'.
-        pos (tuple): Coordinates (ECEF in meters if xyz, or lat/lon/height in degrees/meters if llh).
-    """
-
-    # Mapping for ant2-postype: 0=llh, 1=xyz
-    type_map = {"llh": "0", "xyz": "1"}
-    if postype not in type_map:
-        raise ValueError(f"Invalid postype: {postype}, must be 'llh' or 'xyz'")
-
-    lines = conf_file.read_text(encoding="utf-8").splitlines()
-    new_lines = []
-    for line in lines:
-        if line.strip().startswith("ant2-postype"):
-            new_lines.append(f"ant2-postype       ={postype}        # (0:llh,1:xyz,...)")
-        elif line.strip().startswith("ant2-pos1"):
-            new_lines.append(f"ant2-pos1          ={pos[0]:.4f}")
-        elif line.strip().startswith("ant2-pos2"):
-            new_lines.append(f"ant2-pos2          ={pos[1]:.4f}")
-        elif line.strip().startswith("ant2-pos3"):
-            new_lines.append(f"ant2-pos3          ={pos[2]:.4f}")
-        else:
-            new_lines.append(line)
-
-    conf_file.write_text("\n".join(new_lines), encoding="utf-8")
-    print(f"[INFO] Updated ant2 position in: {conf_file.name}")
+from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
+from dji_geotagger.config.import_config import import_rtklib_config
 
 
 def process_ppk(
     base_obs: Path,
     base_nav: Path,
     rover_dir: Path,
-    override_base_from_sum_file: Path = None,
     ephemeris_files: list[Path] = None,
-    base_position: tuple[float, float, float] = (0, 0, 0),
-    base_position_type: str = "xyz",  # or "llh"
     output_dir: Path = Path(r"temp\ppk_result"),
-    conf_file: Path = Path(r"tools\RTKLIB\default_ppk.conf"),
-    rnx2rtkp: Path = Path(r"tools\RTKLIB\bin\rnx2rtkp.exe")
+    override_base_from_sum_file: Path = None,
+    conf_override: dict = None,
+    rnx2rtkp: Path = Path(r"tools\RTKLIB_bin-rtklib_2.4.3\bin\rnx2rtkp.exe")
 ) -> Path:
     """
     Batch process RTKLIB PPK solution for a directory of rover OBS files.
+
+    This function performs post-processed kinematic (PPK) GNSS positioning using RTKLIB's `rnx2rtkp.exe`.
+    It automatically applies base station coordinates from a `.sum` file (if provided), generates a
+    temporary RTKLIB `.conf` file with optional user overrides, and processes each rover `.obs` file
+    to produce `.pos` outputs.
 
     Parameters:
         base_obs (Path): Path to base station .obs file.
         base_nav (Path): Path to base station .nav file.
         rover_dir (Path): Directory containing rover .obs files.
-        sp3_files (list[Path]): List of precise ephemeris files (.sp3).
-        clk_files (list[Path]): List of precise clock files (.clk).
-        base_position (tuple): Base station position in ECEF (m) or LLH (deg/m).
-        base_position_mode (str): "xyz" for ECEF, "llh" for geodetic.
-        output_dir (Path): Where to store .pos results.
-        conf_file (Path): Path to RTKLIB config file (.conf).
-        rnx2rtkp (Path): Path to rnx2rtkp executable.
+        override_base_from_sum_file (Path, optional): Path to `.sum` file from CSRS-PPP or equivalent,
+            used to extract base station ECEF coordinates (X, Y, Z).
+        ephemeris_files (list[Path], optional): List of precise ephemeris and clock files (.sp3/.clk).
+            If None, the function will attempt to download FINAL IGS products automatically.
+        output_dir (Path, optional): Directory to store output .pos files. Defaults to 'temp/ppk_result'.
+        conf_override (dict, optional): Dictionary of RTKLIB configuration options to override the default.
+            Common keys include "pos1-posmode", "ant2-pos1", etc.
+        rnx2rtkp (Path, optional): Path to RTKLIB rnx2rtkp executable. Default assumes standard install.
 
-    Return:
-        output_dir (Path): Path to where to store .pos results.
+    Returns:
+        Path: Path to the output directory containing all generated .pos files.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Check rnx2rtkp exists
     if not rnx2rtkp.exists():
         print("[ERROR] rnx2rtkp.exe not found.")
-        from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
+        download_RTKLIB_instruction()
 
-
-    # If input sum file
+    # Parse .sum if provided
     if override_base_from_sum_file:
         X, Y, Z, lat, lon, hgt, cor_sys, cov_ecef = sum_file_parser(override_base_from_sum_file)
-        base_position = (X, Y, Z)
-        print(f"[INFO] Parsed base position: (ECEF, system: {cor_sys}) from .sum: ({X:.3f}, {Y:.3f}, {Z:.3f})")
-        print(f"                             (LLH,  system: {cor_sys}) from .sum: ({np.degrees(lat):.3f}°, {np.degrees(lon):.3f}°, {hgt:.3f} m)")
-        print(f"                             Base RMS error (1σ, meters): {np.sqrt(np.diag(cov_ecef))}")
 
         if cor_sys not in ["IGb20", "IGS20", "ITRF2020", "IGS14", "ITRF2014"]:
-            raise ValueError(f"[ERROR] Unexpected base coordinate system '{cor_sys}'. Please convert to IGS-compatible frame (e.g., IGS20) before use.")
+            raise ValueError(f"[ERROR] Unexpected base coordinate system '{cor_sys}'")
 
+        print(f"[INFO] Parsed base ECEF: ({X:.3f}, {Y:.3f}, {Z:.3f}) | LLH: ({np.degrees(lat):.3f}°, {np.degrees(lon):.3f}°, {hgt:.3f} m)")
+        print(f"[INFO] Base RMS error (1σ): {np.sqrt(np.diag(cov_ecef))}")
+
+        base_conf = {
+            "ant2-postype": "xyz",
+            "ant2-pos1": f"{X:.4f}",
+            "ant2-pos2": f"{Y:.4f}",
+            "ant2-pos3": f"{Z:.4f}"
+        }
+
+        if conf_override:
+            base_conf.update(conf_override)
+        conf_file = import_rtklib_config(base_conf)
+    else:
+        # without sum file -> default + override
+        conf_file = import_rtklib_config(conf_override)
     # update conf file
-    update_ant2_position(conf_file = conf_file, postype = base_position_type, pos = base_position)
+    print(f"[INFO] Updated ant2 position in: {conf_file.name}")
 
     # Download ephemeris data (.clk and .sp3)
     if not ephemeris_files:
