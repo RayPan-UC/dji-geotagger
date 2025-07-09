@@ -86,6 +86,7 @@ def compute_camera_positions(df_img_info, df_mrk, df_pos):
 
         cov_ecef = interp["Covariance_total"]
         sd_xyz = np.sqrt(np.diag(cov_ecef))  # [sd_x, sd_y, sd_z]
+        cov_flat = cov_ecef.flatten().tolist()  # row-major
 
         results.append({
             "file_name": row["FileName"],
@@ -97,7 +98,7 @@ def compute_camera_positions(df_img_info, df_mrk, df_pos):
             "sd_x_ecef": sd_xyz[0],
             "sd_y_ecef": sd_xyz[1],
             "sd_z_ecef": sd_xyz[2],
-            "cov_matrix": cov_ecef,
+            "cov_ecef_flat": cov_flat,
             "flight_roll": row["flightRoll"],
             "flight_pitch": row["flightPitch"],
             "flight_yaw": row["flightYaw"],

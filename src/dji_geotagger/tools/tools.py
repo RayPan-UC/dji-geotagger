@@ -116,46 +116,64 @@ def get_crs_igb20() -> CRS:
             AXIS["Geocentric Z",NORTH],
             AUTHORITY["EPSG","10783"]]
     """)
+
+
 def transform_coordinates(
     df: pd.DataFrame,
-    source_crs,
     target_crs,
-    x_col: str = "lon",
-    y_col: str = "lat",
-    z_col: str | None = None,
+    source_crs = get_crs_igb20(),
+    x_col: str = "x_ecef",
+    y_col: str = "y_ecef",
+    z_col: str = "z_ecef",
     out_x: str = "x_tgt",
     out_y: str = "y_tgt",
     out_z: str = "z_tgt",
-    cov_ecef2enu: bool = False
+    cov_ecef2enu: bool = False,
+    drop_original: bool = False
 ) -> pd.DataFrame:
     """
-    Transform coordinates from a source CRS to a target CRS.
+    Transform coordinates from a source CRS to a target CRS and optionally convert ECEF covariance to ENU standard deviations.
 
-    Parameters:
-        df (pd.DataFrame): The input DataFrame containing coordinate columns.
-        source_crs (int | str | pyproj.CRS): The source coordinate reference system (e.g., EPSG:4326, "EPSG:10784", CRS object).
-        target_crs (int | str | pyproj.CRS): The target coordinate reference system (e.g., EPSG:32612 for UTM Zone 12N).
-        x_col (str): The column name in `df` for the X coordinate in the source CRS (e.g., "lon" or "ECEF_X").
-        y_col (str): The column name in `df` for the Y coordinate in the source CRS (e.g., "lat" or "ECEF_Y").
-        z_col (str | None): Optional. Column name for Z coordinate (e.g., "height" or "ECEF_Z"). If None, only 2D transformation is performed.
-        out_x (str): Output column name for transformed X (e.g., "E_UTM" or "x_tgt").
-        out_y (str): Output column name for transformed Y (e.g., "N_UTM" or "y_tgt").
-        out_z (str): Output column name for transformed Z (if z_col is provided).
-        cov_ecef2enu (bool): If True, also transforms covariance matrix in 'cov_matrix' column to ENU.
+    This function transforms 3D coordinates (typically from ECEF) into a target CRS (e.g., UTM).
+    If `cov_ecef2enu` is True and the input DataFrame contains a flattened ECEF covariance matrix (`cov_ecef_flat`),
+    it will also compute ENU-direction standard deviations using per-point latitude/longitude converted from ECEF.
 
-    Returns:
-        pd.DataFrame:
-            A copy of the input DataFrame with added transformed coordinate columns:
-            - out_x, out_y (always)
-            - out_z (only if z_col is provided)
-            - sd_E, sd_N, sd_U (if cov_ecef2enu is True and 'cov_matrix' exists)
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame containing coordinates and optionally covariance data.
+    source_crs : int, str, or pyproj.CRS
+        Source coordinate reference system (e.g., 4978 for ECEF).
+    target_crs : int, str, or pyproj.CRS
+        Target coordinate reference system (e.g., 32612 for UTM Zone 12N).
+    x_col : str, default "x_ecef"
+        Column name for X-coordinate in source CRS.
+    y_col : str, default "y_ecef"
+        Column name for Y-coordinate in source CRS.
+    z_col : str, default "z_ecef"
+        Column name for Z-coordinate in source CRS.
+    out_x : str, default "x_tgt"
+        Output column name for transformed X.
+    out_y : str, default "y_tgt"
+        Output column name for transformed Y.
+    out_z : str, default "z_tgt"
+        Output column name for transformed Z.
+    cov_ecef2enu : bool, default False
+        Whether to convert ECEF covariance to ENU standard deviations (`sd_E`, `sd_N`, `sd_U`).
+        Requires a `cov_ecef_flat` column (list or string of 9 elements representing 3×3 ECEF covariance).
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with additional columns:
+        - out_x, out_y, (and out_z if z_col is provided): Transformed coordinates in target CRS.
+        - sd_E, sd_N, sd_U (if cov_ecef2enu is True): ENU standard deviations derived from ECEF covariance.
     """
-    from pyproj import CRS, Transformer
-
     src = CRS.from_user_input(source_crs)
     tgt = CRS.from_user_input(target_crs)
     transformer = Transformer.from_crs(src, tgt, always_xy=True)
 
+    # Transform coordinates
     if z_col and z_col in df.columns:
         x_t, y_t, z_t = transformer.transform(
             df[x_col].values,
@@ -173,16 +191,39 @@ def transform_coordinates(
         df[out_x] = x_t
         df[out_y] = y_t
 
-    if cov_ecef2enu and 'cov_matrix' in df.columns and 'lat' in df.columns and 'lon' in df.columns:
+    # Covariance transformation (ECEF → ENU)
+    if cov_ecef2enu and 'cov_ecef_flat' in df.columns:
         sd_E, sd_N, sd_U = [], [], []
+        cov_enu_flat_list = []
+
+        #  ECEF → LLH 
+        transformer_llh = Transformer.from_crs("EPSG:4978", "EPSG:4326", always_xy=True)
+
         for _, row in df.iterrows():
-            cov = np.array(eval(row['cov_matrix']))
-            enu_cov = covariance_ecef_to_enu(cov, row['lon'], row['lat'])
+            # cov_flat to 3x3 matrix
+            cov_flat = row['cov_ecef_flat']
+            if isinstance(cov_flat, str):
+                cov_flat = [float(x) for x in cov_flat.strip("[]").split(",")]
+            cov = np.array(cov_flat).reshape(3, 3)
+
+            # transfer to LLH
+            lon, lat, _ = transformer_llh.transform(
+                row[x_col], row[y_col], row[z_col] if z_col else 0.0
+            )
+
+            # cov ecef to ENU
+            enu_cov = covariance_ecef_to_enu(cov, lon, lat)
+            cov_enu_flat_list.append(enu_cov.flatten().tolist())
             sd_E.append(np.sqrt(enu_cov[0, 0]))
             sd_N.append(np.sqrt(enu_cov[1, 1]))
             sd_U.append(np.sqrt(enu_cov[2, 2]))
+
         df['sd_E'] = sd_E
         df['sd_N'] = sd_N
         df['sd_U'] = sd_U
+        df["cov_enu_flat"] = cov_enu_flat_list
 
+        if drop_original:
+            df = df.drop(columns=[x_col, y_col, z_col], errors="ignore")
+            
     return df

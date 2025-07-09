@@ -44,15 +44,12 @@ final_df = load_and_compute_camera_positions(
 target_crs = 26912
 final_df = transform_coordinates(
     final_df,
-    source_crs=get_crs_igb20(),
     target_crs=CRS.from_user_input(target_crs),
-    x_col="x_ecef",
-    y_col="y_ecef",
-    z_col="z_ecef",
     out_x="E_NAD83",
     out_y="N_NAD83",
     out_z="H_NAD83",
-    cov_ecef2enu=True
+    cov_ecef2enu=True,
+    drop_original=True
 )
 
 # === Save result as CSV ===
