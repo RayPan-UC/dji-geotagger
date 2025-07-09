@@ -18,9 +18,10 @@ def correct_dji_gimbal_lock(roll: float, pitch: float, yaw: float) -> tuple[floa
     Returns:
         (roll, pitch, yaw) -- corrected angles in radians
     """
-    if abs(pitch) >= np.pi / 2 - 0.05:
-        roll += np.pi if (roll >= np.pi / 2) or (roll <= np.pi / 2) else roll
-        yaw = yaw # ignore gimbal yaw (will be replace by flight yaw)
+    if abs(pitch + np.pi / 2) < np.radians(1.0):  # pitch ≈ -90°
+        if abs(abs(roll) - np.pi) < np.radians(1.0):  # roll ≈ ±180°
+            roll = 0.0  # roll flip: set to 0
+        yaw = (yaw + np.pi) % (2 * np.pi)  # yaw flip but we will use flight yaw for final out put
     return roll, pitch, yaw
 
 def combine_all_img_info(
