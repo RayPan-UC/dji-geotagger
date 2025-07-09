@@ -117,6 +117,14 @@ def get_crs_igb20() -> CRS:
             AUTHORITY["EPSG","10783"]]
     """)
 
+def unflatten_matrix(text: str) -> np.ndarray:
+    """
+    Parse a space-separated 9-element string into a 3x3 numpy array.
+    """
+    values = [float(v) for v in text.strip().split()]
+    if len(values) != 9:
+        raise ValueError("Input string must contain exactly 9 float values.")
+    return np.array(values).reshape(3, 3)
 
 def transform_coordinates(
     df: pd.DataFrame,
@@ -202,9 +210,7 @@ def transform_coordinates(
         for _, row in df.iterrows():
             # cov_flat to 3x3 matrix
             cov_flat = row['cov_ecef_flat']
-            if isinstance(cov_flat, str):
-                cov_flat = [float(x) for x in cov_flat.strip("[]").split(",")]
-            cov = np.array(cov_flat).reshape(3, 3)
+            cov_ecef_matrix = unflatten_matrix(cov_flat)
 
             # transfer to LLH
             lon, lat, _ = transformer_llh.transform(
@@ -212,7 +218,7 @@ def transform_coordinates(
             )
 
             # cov ecef to ENU
-            enu_cov = covariance_ecef_to_enu(cov, lon, lat)
+            enu_cov = covariance_ecef_to_enu(cov_ecef_matrix, lon, lat)
             cov_enu_flat_list.append(enu_cov.flatten().tolist())
             sd_E.append(np.sqrt(enu_cov[0, 0]))
             sd_N.append(np.sqrt(enu_cov[1, 1]))

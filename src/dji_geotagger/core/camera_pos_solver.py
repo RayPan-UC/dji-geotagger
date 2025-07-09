@@ -49,6 +49,12 @@ def apply_gimbal_offset(position_xyz, offset_xyz):
     """
     return tuple(np.array(position_xyz) + np.array(offset_xyz))
 
+def flatten_matrix(matrix) -> str:
+    """
+    Flatten a 3x3 matrix or 9-element list into a space-separated string.
+    """
+    arr = np.array(matrix).flatten()
+    return " ".join(f"{v:.8f}" for v in arr)
 
 def compute_camera_positions(df_img_info, df_mrk, df_pos):
     """
@@ -86,7 +92,7 @@ def compute_camera_positions(df_img_info, df_mrk, df_pos):
 
         cov_ecef = interp["Covariance_total"]
         sd_xyz = np.sqrt(np.diag(cov_ecef))  # [sd_x, sd_y, sd_z]
-        cov_flat = cov_ecef.flatten().tolist()  # row-major
+        cov_flat = flatten_matrix(cov_ecef)  # row-major
 
         results.append({
             "file_name": row["FileName"],
