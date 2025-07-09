@@ -117,6 +117,13 @@ def get_crs_igb20() -> CRS:
             AUTHORITY["EPSG","10783"]]
     """)
 
+def flatten_matrix(matrix) -> str:
+    """
+    Flatten a 3x3 matrix or 9-element list into a space-separated string.
+    """
+    arr = np.array(matrix).flatten()
+    return " ".join(f"{v:.8f}" for v in arr)
+
 def unflatten_matrix(text: str) -> np.ndarray:
     """
     Parse a space-separated 9-element string into a 3x3 numpy array.
@@ -219,7 +226,7 @@ def transform_coordinates(
 
             # cov ecef to ENU
             enu_cov = covariance_ecef_to_enu(cov_ecef_matrix, lon, lat)
-            cov_enu_flat_list.append(enu_cov.flatten().tolist())
+            cov_enu_flat = flatten_matrix(enu_cov)
             sd_E.append(np.sqrt(enu_cov[0, 0]))
             sd_N.append(np.sqrt(enu_cov[1, 1]))
             sd_U.append(np.sqrt(enu_cov[2, 2]))
@@ -227,7 +234,7 @@ def transform_coordinates(
         df['sd_E'] = sd_E
         df['sd_N'] = sd_N
         df['sd_U'] = sd_U
-        df["cov_enu_flat"] = cov_enu_flat_list
+        df["cov_enu_flat"] = cov_enu_flat
 
         if drop_original:
             df = df.drop(columns=[x_col, y_col, z_col], errors="ignore")

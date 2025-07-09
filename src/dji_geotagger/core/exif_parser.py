@@ -18,11 +18,15 @@ def correct_dji_gimbal_lock(roll: float, pitch: float, yaw: float) -> tuple[floa
     Returns:
         (roll, pitch, yaw) -- corrected angles in radians
     """
+    roll = np.radians(roll)
+    pitch = np.radians(pitch)
+    yaw = np.radians(yaw)
+
     if abs(pitch + np.pi / 2) < np.radians(1.0):  # pitch ≈ -90°
         if abs(abs(roll) - np.pi) < np.radians(1.0):  # roll ≈ ±180°
             roll = 0.0  # roll flip: set to 0
         yaw = (yaw + np.pi) % (2 * np.pi)  # yaw flip but we will use flight yaw for final out put
-    return roll, pitch, yaw
+    return np.degrees(roll), np.degrees(pitch), np.degrees(yaw)
 
 def combine_all_img_info(
     photo_folder: Path,
@@ -91,7 +95,6 @@ def combine_all_img_info(
             roll, pitch, yaw = correct_dji_gimbal_lock(gimbal_roll, gimbal_pitch, gimbal_yaw)
 
             # Correct DJI-style pitch/roll/yaw for photogrammetry (nadir = pitch +90°)
-            roll = roll
             pitch = pitch + 90  # DJI defines -90° as nadir
             yaw = flight_yaw    # DJI flight yaw is typically correct
 
