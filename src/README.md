@@ -55,74 +55,96 @@ pip install dji-geotagger
 
 ```python
 from pathlib import Path
+import datetime
 from pyproj import CRS
-from dji_geotagger import (
-    raw_to_rinex_batch, try_download_igs_data, process_ppk,
-    combine_all_img_info, combine_all_mrk, combine_all_pos,
-    compute_camera_positions, transform_coordinates, get_crs_igb20
-)
+from dji_geotagger import *
 
-# === Step 1: Convert raw GNSS logs to RINEX ===
-raw_to_rinex_batch(
-    input_dir=Path("project/data"),
-    keywords=[".dat"],  # for base
+# === User-defined project path ===
+project_root = Path(r"/path/to/your/project/SynopticSite1")
+ppp_sum_file = project_root / "base_data" / "DRTK" / "PPP_result" / "DRTK3_0006_20250513073737_8PHDMCM00A1369.sum"
+
+# === Clean temporary directories ===
+clean_temp_dirs()
+
+# === Convert base and rover raw logs to RINEX ===
+base_obs, base_nav = raw_to_rinex_batch(
+    keywords=['20250513', '0006', 'DRTK', '.dat'],
+    input_dir=project_root,
     type="base",
-    antenna_height_in_meter=0.0
 )
 
-raw_to_rinex_batch(
-    input_dir=Path("project/data"),
-    keywords=[".bin"],  # for rover
-    type="rover",
-    antenna_height_in_meter=0.0
+rover_dir = raw_to_rinex_batch(
+    keywords=['20250513', 'PPKRAW', '.bin'],
+    input_dir=project_root,
+    type="rover"
 )
 
-# === Step 2: Download precise ephemeris data (SP3/CLK) ===
-ephemeris_files = try_download_igs_data(base_obs_path=Path("temp/rinex_base/base.obs"))
-
-# === Step 3: Run PPK positioning ===
+# === Post-process PPK with base .sum file ===
 process_ppk(
-    base_obs=Path("temp/rinex_base/base.obs"),
-    base_nav=Path("temp/rinex_base/base.nav"),
-    rover_dir=Path("temp/rinex_rover"),
-    override_base_from_sum_file=Path("project/base/base.sum"),
-    ephemeris_files=ephemeris_files,
-    output_dir=Path("temp/ppk_result")
+    base_obs=base_obs,
+    base_nav=base_nav,
+    rover_dir=rover_dir,
+    override_base_from_sum_file=ppp_sum_file,
+    output_dir=Path("temp/ppk_result"),
 )
 
-# === Step 4: Load and merge data ===
-df_img = combine_all_img_info(photo_folder=Path("project/images"))
-df_mrk = combine_all_mrk(mrk_folder=Path("project/mrk"))
-df_pos = combine_all_pos(
-    base_sum_file=Path("project/base/base.sum"),
-    pos_folder=Path("temp/ppk_result")
+# === Compute corrected camera positions ===
+final_df = load_and_compute_camera_positions(
+    mrk_dir=project_root,
+    img_dir=project_root,
+    pos_dir=Path("temp/ppk_result"),
+    base_sum_file=ppp_sum_file
 )
 
-# === Step 5: Compute geotagged camera positions ===
-df_output = compute_camera_positions(df_img, df_mrk, df_pos)
-
-# === Step 6: Transform coordinates (e.g., to UTM NAD83 / Zone 12N) ===
-df_output = transform_coordinates(
-    df_output,
-    source_crs=get_crs_igb20(),
-    target_crs=CRS.from_epsg(26912),
-    x_col="x_ecef",
-    y_col="y_ecef",
-    z_col="z_ecef",
+# === Transform to target coordinate system (e.g., NAD83 / UTM zone 12N) ===
+target_crs = 26912
+final_df = transform_coordinates(
+    final_df,
+    target_crs=CRS.from_user_input(target_crs),
     out_x="E_NAD83",
     out_y="N_NAD83",
     out_z="H_NAD83",
-    cov_ecef2enu=True
+    cov_ecef2enu=True,
+    drop_original=True
 )
 
-# === Step 7: Export to CSV ===
-df_output.to_csv("geotag_output/geotagged_results.csv", index=False)
+# === Save result as CSV ===
+output_csv = Path(f"geotag_output/geotagged_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+output_csv.parent.mkdir(parents=True, exist_ok=True)
+final_df.to_csv(output_csv, index=False)
+print(f"[INFO] Exported geotagged data to: {output_csv}")
 ```
 
 ## Output Format
 
-| file_name | gps_week | gps_time | x_ecef | y_ecef | z_ecef | sd_x_ecef | sd_y_ecef | sd_z_ecef | yaw | pitch | roll |
-|-----------|----------|----------|--------|--------|--------|-----------|-----------|-----------|------|--------|------|
+
+The output CSV contains the following columns:
+
+| Column Name           | Description |
+|------------------------|-------------|
+| `file_name`           | Image file name |
+| `gps_week`            | GPS week number |
+| `gps_time`            | Seconds into the GPS week |
+| `sd_x_ecef`           | Standard deviation in ECEF X (meters) |
+| `sd_y_ecef`           | Standard deviation in ECEF Y (meters) |
+| `sd_z_ecef`           | Standard deviation in ECEF Z (meters) |
+| `cov_ecef_flat`       | Flattened 3×3 ECEF covariance matrix (row-major, space-separated) |
+| `flight_roll`         | Aircraft body roll (degrees) |
+| `flight_pitch`        | Aircraft body pitch (degrees) |
+| `flight_yaw`          | Aircraft body yaw (degrees) |
+| `gimbal_roll`         | Gimbal-reported roll (degrees) |
+| `gimbal_pitch`        | Gimbal-reported pitch (degrees) |
+| `gimbal_yaw`          | Gimbal-reported yaw (degrees) |
+| `dji_geotagger_roll`  | Corrected camera roll for photogrammetry (degrees), with gimbal lock handling |
+| `dji_geotagger_pitch` | Corrected camera pitch for photogrammetry (degrees), computed as `gimbal_pitch + 90` |
+| `dji_geotagger_yaw`   | Camera yaw for photogrammetry (degrees), taken directly from `flight_yaw` |
+| `E_NAD83`             | Easting in NAD83 / UTM Zone 12N (meters) |
+| `N_NAD83`             | Northing in NAD83 / UTM Zone 12N (meters) |
+| `H_NAD83`             | Height in NAD83 ellipsoidal coordinates (meters) |
+| `sd_E`                | Standard deviation in Easting (ENU, meters) |
+| `sd_N`                | Standard deviation in Northing (ENU, meters) |
+| `sd_U`                | Standard deviation in Up (ENU, meters) |
+| `cov_enu_flat`        | Flattened 3×3 ENU covariance matrix (row-major, space-separated) |
 
 ## License
 
