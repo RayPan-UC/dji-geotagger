@@ -2,7 +2,7 @@
 
 **A precise PPK + MRK-based geotagging tool for DJI RTK drones**
 
-This Python library enables centimeter-level camera geotagging by combining PPK `.pos` solutions, DJI `.MRK` gimbal offset corrections, and EXIF/XMP metadata from DJI RTK drone images. It is designed for photogrammetry and remote sensing workflows that require accurate EOPs without using ground control points (GCPs).
+This Python library enables centimetre-level camera geotagging by combining PPK `.pos` solutions, DJI `.MRK` gimbal offset corrections, and EXIF/XMP metadata from DJI RTK drone images. It is designed for photogrammetry and remote sensing workflows that require accurate EOPs without using ground control points (GCPs).
 
 ## Features
 
@@ -25,7 +25,7 @@ pip install dji-geotagger
 ## Dependencies
 
 - Python ≥ 3.9
-- `pandas`, `numpy`, `pyproj`, `tqdm`, `exifread`
+-  `pillow`, `defusedxml`, `pandas`, `numpy`, `pyproj`, `tqdm`
 - RTKLIB (`convbin.exe`, `rnx2rtkp.exe`)
 
 ## Workflow Overview
@@ -125,9 +125,9 @@ The output CSV contains the following columns:
 | `file_name`           | Image file name |
 | `gps_week`            | GPS week number |
 | `gps_time`            | Seconds into the GPS week |
-| `sd_x_ecef`           | Standard deviation in ECEF X (meters) |
-| `sd_y_ecef`           | Standard deviation in ECEF Y (meters) |
-| `sd_z_ecef`           | Standard deviation in ECEF Z (meters) |
+| `sd_x_ecef`           | Standard deviation in ECEF X (metres) |
+| `sd_y_ecef`           | Standard deviation in ECEF Y (metres) |
+| `sd_z_ecef`           | Standard deviation in ECEF Z (metres) |
 | `cov_ecef_flat`       | Flattened 3×3 ECEF covariance matrix (row-major, space-separated) |
 | `flight_roll`         | Aircraft body roll (degrees) |
 | `flight_pitch`        | Aircraft body pitch (degrees) |
@@ -138,13 +138,15 @@ The output CSV contains the following columns:
 | `dji_geotagger_roll`  | Corrected camera roll for photogrammetry (degrees), with gimbal lock handling |
 | `dji_geotagger_pitch` | Corrected camera pitch for photogrammetry (degrees), computed as `gimbal_pitch + 90` |
 | `dji_geotagger_yaw`   | Camera yaw for photogrammetry (degrees), taken directly from `flight_yaw` |
-| `E_NAD83`             | Easting in NAD83 / UTM Zone 12N (meters) |
-| `N_NAD83`             | Northing in NAD83 / UTM Zone 12N (meters) |
-| `H_NAD83`             | Height in NAD83 ellipsoidal coordinates (meters) |
-| `sd_E`                | Standard deviation in Easting (ENU, meters) |
-| `sd_N`                | Standard deviation in Northing (ENU, meters) |
-| `sd_U`                | Standard deviation in Up (ENU, meters) |
+| `E_NAD83`             | Easting in NAD83 / UTM Zone 12N (metres) |
+| `N_NAD83`             | Northing in NAD83 / UTM Zone 12N (metres) |
+| `H_NAD83`             | Height in NAD83 ellipsoidal coordinates (metres) |
+| `sd_E`                | Standard deviation in Easting (ENU, metres) |
+| `sd_N`                | Standard deviation in Northing (ENU, metres) |
+| `sd_U`                | Standard deviation in Up (ENU, metres) |
 | `cov_enu_flat`        | Flattened 3×3 ENU covariance matrix (row-major, space-separated) |
+
+Note: The projected coordinates (`E_NAD83`, `N_NAD83`, `H_NAD83`) are output in NAD83 / UTM Zone 12N by default. Users can customize the coordinate reference system (CRS) and output column formats according to their project requirements.
 
 ## License
 
