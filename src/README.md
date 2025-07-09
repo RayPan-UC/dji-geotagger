@@ -53,29 +53,69 @@ pip install -r requirements.txt
 ## Example Usage
 
 ```python
+from pathlib import Path
+from pyproj import CRS
 from dji_geotagger import (
     raw_to_rinex_batch, try_download_igs_data, process_ppk,
     combine_all_img_info, combine_all_mrk, combine_all_pos,
-    compute_camera_positions
+    compute_camera_positions, transform_coordinates, get_crs_igb20
 )
 
-# Convert raw GNSS logs
-raw_to_rinex_batch(input_dir="data", keywords=[".bin"], type="rover", antenna_height_in_meter=0.0)
+# === Step 1: Convert raw GNSS logs to RINEX ===
+raw_to_rinex_batch(
+    input_dir=Path("project/data"),
+    keywords=[".dat"],  # for base
+    type="base",
+    antenna_height_in_meter=0.0
+)
 
-# Download SP3/CLK
+raw_to_rinex_batch(
+    input_dir=Path("project/data"),
+    keywords=[".bin"],  # for rover
+    type="rover",
+    antenna_height_in_meter=0.0
+)
+
+# === Step 2: Download precise ephemeris data (SP3/CLK) ===
 ephemeris_files = try_download_igs_data(base_obs_path=Path("temp/rinex_base/base.obs"))
 
-# Run RTKLIB PPK
-process_ppk(...)
+# === Step 3: Run PPK positioning ===
+process_ppk(
+    base_obs=Path("temp/rinex_base/base.obs"),
+    base_nav=Path("temp/rinex_base/base.nav"),
+    rover_dir=Path("temp/rinex_rover"),
+    override_base_from_sum_file=Path("project/base/base.sum"),
+    ephemeris_files=ephemeris_files,
+    output_dir=Path("temp/ppk_result")
+)
 
-# Load data
-df_img = combine_all_img_info(photo_folder=Path("images/"))
-df_mrk = combine_all_mrk(mrk_folder=Path("mrk/"))
-df_pos = combine_all_pos(pos_folder=Path("pos/")
+# === Step 4: Load and merge data ===
+df_img = combine_all_img_info(photo_folder=Path("project/images"))
+df_mrk = combine_all_mrk(mrk_folder=Path("project/mrk"))
+df_pos = combine_all_pos(
+    base_sum_file=Path("project/base/base.sum"),
+    pos_folder=Path("temp/ppk_result")
+)
 
-# Compute final geotagged positions
+# === Step 5: Compute geotagged camera positions ===
 df_output = compute_camera_positions(df_img, df_mrk, df_pos)
-df_output.to_csv("geotagged_results.csv", index=False)
+
+# === Step 6: Transform coordinates (e.g., to UTM NAD83 / Zone 12N) ===
+df_output = transform_coordinates(
+    df_output,
+    source_crs=get_crs_igb20(),
+    target_crs=CRS.from_epsg(26912),
+    x_col="x_ecef",
+    y_col="y_ecef",
+    z_col="z_ecef",
+    out_x="E_NAD83",
+    out_y="N_NAD83",
+    out_z="H_NAD83",
+    cov_ecef2enu=True
+)
+
+# === Step 7: Export to CSV ===
+df_output.to_csv("geotag_output/geotagged_results.csv", index=False)
 ```
 
 ## Output Format
