@@ -30,7 +30,7 @@ def raw_to_rinex_single(
     output_dir: Path= Path("temp"),
     antenna_height_in_meter: float= 0.0,
     type: str = "base",
-    convbin_path: Path = Path(r"tools\RTKLIB_bin-rtklib_2.4.3\bin\convbin.exe")
+    convbin_path: Path = Path(r"tools\RTKLIB\bin\convbin.exe")
     ):
 
     
@@ -75,7 +75,7 @@ def raw_to_rinex_batch(
     output_dir: Path = Path("temp"),
     antenna_height_in_meter: float = 0.0,
     type: str = "base",
-    convbin_path: Path = Path(r"tools\RTKLIB_bin-rtklib_2.4.3\bin\convbin.exe")
+    convbin_path: Path = Path(r"tools\RTKLIB\bin\convbin.exe")
 ):
     matched_files = find_raw_files_by_keywords(input_dir, keywords)
     if not matched_files:

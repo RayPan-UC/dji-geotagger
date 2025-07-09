@@ -5,30 +5,39 @@ import zipfile
 import io
 
 # RTKLIB
+def download_RTKLIB_instruction(path: Path) -> bool:
+    """
+    Downloads and installs RTKLIB executables (convbin.exe, rnx2rtkp.exe)
+    into the specified path if they are not found.
 
-def download_RTKLIB_instruction(path: Path):
-    answer = input("[HINT] Would you like to download and install RTKLIB automatically? [Y/n] .strip().lower()")
+    Args:
+        path (Path): Expected full path to the RTKLIB tool (e.g., tools/RTKLIB/bin/rnx2rtkp.exe)
+
+    Returns:
+        bool: True if installation failed or was declined, False if successful
+    """
+    print(f"[ERROR] {path.name} not found. Expected path: {path}")
+    answer = input("[HINT] Would you like to download and install RTKLIB automatically? [Y/n] ").strip().lower()
 
     def print_instruction():
-            print(f"""
+        print(f"""
 User declined auto-install.
 Please install RTKLIB manually from the official website:
 🔗 https://www.rtklib.com/
-    
+
 Then either:
-1. Specify the full path to rnx2rtkp.exe when calling this script
-    e.g. rnx2rtkp = Path(r"tools/RTKLIB_bin-rtklib_2.4.3/bin/rnx2rtkp.exe")
-         convbin = Path(r"tools/RTKLIB_bin-rtklib_2.4.3/bin/convbin.exe")
-2. Or place it in the default folder:
+1. Specify the full path to the RTKLIB executable, e.g.:
+    rnx2rtkp = Path("tools/RTKLIB/bin/rnx2rtkp.exe")
+    convbin  = Path("tools/RTKLIB/bin/convbin.exe")
+2. Or place it at the default location:
     {path.resolve()}
 
 Exiting.
-              """)
-            
+        """)
+
     if answer not in ["", "y", "yes"]:
         print_instruction()
         return True
-    
 
     bin_dir = path.parent
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -43,15 +52,22 @@ Exiting.
             print_instruction()
             return True
 
-        print("[INFO] Extracting files...")
+        print("[INFO] Extracting bin/ folder contents...")
         with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
-            zf.extractall(bin_dir.parent)
+            for member in zf.namelist():
+                if member.startswith("RTKLIB_bin-rtklib_2.4.3/bin/") and not member.endswith("/"):
+                    relative_path = Path(member).relative_to("RTKLIB_bin-rtklib_2.4.3/bin")
+                    target_path = bin_dir / relative_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as source, open(target_path, "wb") as out_file:
+                        out_file.write(source.read())
 
+        # Final check
         if path.exists():
-            print(f"[INFO] RTKLIB installed successfully at: {path.resolve()}")
+            print(f"[✓] RTKLIB installed successfully at: {path.resolve()}")
             return False
         else:
-            print("[ERROR] RTKLIB downloaded, but rnx2rtkp.exe not found. Please verify manually.")
+            print("[ERROR] RTKLIB downloaded, but expected executable not found. Please verify manually.")
             return True
 
     except Exception as e:

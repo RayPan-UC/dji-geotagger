@@ -16,7 +16,7 @@ def process_ppk(
     output_dir: Path = Path(r"temp\ppk_result"),
     override_base_from_sum_file: Path = None,
     conf_override: dict = None,
-    rnx2rtkp: Path = Path(r"tools\RTKLIB_bin-rtklib_2.4.3\bin\rnx2rtkp.exe")
+    rnx2rtkp: Path = Path(r"tools\RTKLIB\bin\rnx2rtkp.exe")
 ) -> Path:
     """
     Batch process RTKLIB PPK solution for a directory of rover OBS files.
@@ -46,7 +46,6 @@ def process_ppk(
 
     # Check rnx2rtkp exists
     if not rnx2rtkp.exists():
-        print("[ERROR] rnx2rtkp.exe not found.")
         download_RTKLIB_instruction()
 
     # Parse .sum if provided
