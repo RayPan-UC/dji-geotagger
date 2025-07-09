@@ -6,6 +6,15 @@ from pyproj import Transformer, CRS
 import numpy as np
 from numpy import sin, cos, arcsin, arctan2, sqrt, degrees, radians, sign, atan2, asin, pi
 
+def get_library_root_path() -> Path:
+    root_path = Path(__file__).resolve().parent.parent
+    return root_path
+
+def get_rtklib_executable(tool_name: str) -> Path:
+    """
+    Returns the full path to a RTKLIB tool (e.g. convbin, rnx2rtkp) in the library's RTKLIB/bin folder.
+    """
+    return get_library_root_path() / "tools" / "RTKLIB" / "bin" / f"{tool_name}.exe"
 
 def clean_temp_dirs(
     temp_root: Path = Path("temp"),

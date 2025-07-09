@@ -3,6 +3,7 @@ from pathlib import Path
 import requests
 import zipfile
 import io
+from dji_geotagger.tools.tools import get_library_root_path
 
 # RTKLIB
 def download_RTKLIB_instruction(path: Path) -> bool:
@@ -39,7 +40,8 @@ Exiting.
         print_instruction()
         return True
 
-    bin_dir = path.parent
+    # Always install to library_root/tools/RTKLIB/bin
+    bin_dir = get_library_root_path() / "tools" / "RTKLIB" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -64,7 +66,7 @@ Exiting.
 
         # Final check
         if path.exists():
-            print(f"[✓] RTKLIB installed successfully at: {path.resolve()}")
+            print(f"[✓] RTKLIB installed successfully at: {bin_dir.resolve()}")
             return False
         else:
             print("[ERROR] RTKLIB downloaded, but expected executable not found. Please verify manually.")

@@ -1,13 +1,19 @@
 from pathlib import Path
 from dji_geotagger.config.default_ppk_dict import DEFAULT_PPK_CONF
+from dji_geotagger.tools.tools import get_library_root_path
 
-def import_rtklib_config(user_override: dict = None, output_path: Path = Path("config/rtklib_auto.conf")) -> Path:
+def import_rtklib_config(user_override: dict = None, output_path: Path = None) -> Path:
     """
     Merge default config with user override, export to .conf file
 
     Returns:
         Path to generated .conf file
     """
+    # Handle default output path
+    if output_path is None:
+        root_path = get_library_root_path()
+        output_path = root_path / "config" / "rtklib_auto.conf"
+
     config = DEFAULT_PPK_CONF.copy()
     if user_override:
         config.update(user_override)

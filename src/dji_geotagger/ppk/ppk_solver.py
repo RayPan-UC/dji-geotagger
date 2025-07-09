@@ -6,6 +6,7 @@ from dji_geotagger.ppk.ephemeris_downloader import try_download_igs_data
 from dji_geotagger.core.PPP_sum_parser import sum_file_parser
 from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
 from dji_geotagger.config.import_config import import_rtklib_config
+from dji_geotagger.tools.tools import get_rtklib_executable
 
 
 def process_ppk(
@@ -16,7 +17,7 @@ def process_ppk(
     output_dir: Path = Path(r"temp\ppk_result"),
     override_base_from_sum_file: Path = None,
     conf_override: dict = None,
-    rnx2rtkp: Path = Path(r"tools\RTKLIB\bin\rnx2rtkp.exe")
+    rnx2rtkp: Path = None
 ) -> Path:
     """
     Batch process RTKLIB PPK solution for a directory of rover OBS files.
@@ -44,9 +45,17 @@ def process_ppk(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check rnx2rtkp exists
+    # Check rnx2rtkp
+    if rnx2rtkp is None:
+        rnx2rtkp = get_rtklib_executable("rnx2rtkp")
+
     if not rnx2rtkp.exists():
-        download_RTKLIB_instruction()
+        success = download_RTKLIB_instruction(rnx2rtkp)
+        if success:
+            # After download, recheck
+            rnx2rtkp = get_rtklib_executable("rnx2rtkp")
+            if not rnx2rtkp.exists():
+                raise FileNotFoundError(f"[FATAL] RTKLIB tool still not found: {rnx2rtkp}")
 
     # Parse .sum if provided
     if override_base_from_sum_file:

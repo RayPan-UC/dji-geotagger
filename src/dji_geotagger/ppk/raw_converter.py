@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 from datetime import datetime
 from dji_geotagger.tools.install_utils import download_RTKLIB_instruction
+from dji_geotagger.tools.tools import get_rtklib_executable
 
 def extract_datetime_from_filename(file: Path) -> datetime:
     """
@@ -30,13 +31,22 @@ def raw_to_rinex_single(
     output_dir: Path= Path("temp"),
     antenna_height_in_meter: float= 0.0,
     type: str = "base",
-    convbin_path: Path = Path(r"tools\RTKLIB\bin\convbin.exe")
+    convbin: Path = None
     ):
 
     
-    if not convbin_path.exists():
-        download_RTKLIB_instruction(convbin_path)
 
+    # Check convbin.exe
+    if convbin is None:
+        convbin = get_rtklib_executable("rnx2rtkp")
+
+    if not convbin.exists():
+        success = download_RTKLIB_instruction(convbin)
+        if success:
+            # After download, recheck
+            convbin = get_rtklib_executable("rnx2rtkp")
+            if not convbin.exists():
+                raise FileNotFoundError(f"[FATAL] RTKLIB tool still not found: {convbin}")
     rinex_dir = output_dir / f"rinex_{type}"
     rinex_dir.mkdir(parents=True, exist_ok=True)
 
@@ -50,7 +60,7 @@ def raw_to_rinex_single(
 
 
     cmd = [
-        str(convbin_path),
+        str(convbin),
         "-r", "rtcm3",
         "-tr", ts_str,
         "-hd", f"0/0/{antenna_height_in_meter}",
@@ -73,20 +83,29 @@ def raw_to_rinex_batch(
     output_dir: Path = Path("temp"),
     antenna_height_in_meter: float = 0.0,
     type: str = "base",
-    convbin_path: Path = Path(r"tools\RTKLIB\bin\convbin.exe")
+    convbin: Path = None
 ):
     matched_files = find_raw_files_by_keywords(input_dir, keywords)
     if not matched_files:
         print("[INFO] No matching files found.")
         return
     
-    if not convbin_path.exists():
-        download_RTKLIB_instruction(convbin_path)
+    # Check convbin.exe
+    if convbin is None:
+        convbin = get_rtklib_executable("rnx2rtkp")
+
+    if not convbin.exists():
+        success = download_RTKLIB_instruction(convbin)
+        if success:
+            # After download, recheck
+            convbin = get_rtklib_executable("rnx2rtkp")
+            if not convbin.exists():
+                raise FileNotFoundError(f"[FATAL] RTKLIB tool still not found: {convbin}")
 
     print(f"[INFO] Found {len(matched_files)} files for type: {type}")
     for f in matched_files:
         try:
-            raw_to_rinex_single(f, output_dir, antenna_height_in_meter, type, convbin_path)
+            raw_to_rinex_single(f, output_dir, antenna_height_in_meter, type, convbin)
         except Exception as e:
             print(f"[ERROR] {f.name}: {e}")
 
