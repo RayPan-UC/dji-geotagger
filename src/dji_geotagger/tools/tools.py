@@ -209,7 +209,6 @@ def transform_coordinates(
     # Covariance transformation (ECEF → ENU)
     if cov_ecef2enu and 'cov_ecef_flat' in df.columns:
         sd_E, sd_N, sd_U = [], [], []
-        cov_enu_flat_list = []
 
         #  ECEF → LLH 
         transformer_llh = Transformer.from_crs("EPSG:4978", "EPSG:4326", always_xy=True)
@@ -237,6 +236,6 @@ def transform_coordinates(
         df["cov_enu_flat"] = cov_enu_flat
 
         if drop_original:
-            df = df.drop(columns=[x_col, y_col, z_col], errors="ignore")
+            df = df.drop(columns=["x_ecef", "y_ecef", "z_ecef", "sd_x_ecef", "sd_y_ecef", "sd_z_ecef", "cov_ecef_flat"], errors="ignore")
             
     return df
