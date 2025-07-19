@@ -92,7 +92,6 @@ def raw_to_rinex_single(
         raise RuntimeError(f"[ERROR] Failed to convert {input_path}") from e
     
     if type == "base":
-        base_export_hint()
         rinex_dir = output_dir / "rinex_base"
         obs_list = list(rinex_dir.glob("*.obs"))
         nav_list = list(rinex_dir.glob("*.nav"))
@@ -187,7 +186,7 @@ def base_export_hint():
               1. Upload the `.obs` file
               2. Enter your email address to receive results
 
-        ⚠️ Recommended options:")
+        ⚠️ Recommended options:
                 - Positioning mode: Static
                 - Coordinate system: ITRF
         

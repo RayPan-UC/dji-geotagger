@@ -61,7 +61,11 @@ def combine_all_img_info(
             metadata = et.get_metadata(str(img_path))
             metadata_list.extend(metadata)
     """
-
+    # Check dependency
+    try:
+        import defusedxml
+    except ImportError:
+        raise ImportError("[ERROR] Missing dependency: defusedxml. Please install with `pip install defusedxml`")
 
     records = []
     for img_path in tqdm(image_list, desc="[INFO] Gathering image metadata (EXIF/XMP via Pillow)"):
@@ -71,7 +75,7 @@ def combine_all_img_info(
                 xmp_data = im.getxmp()
 
             if xmp_data is None:
-                raise ValueError("No XMP metadata found")
+                raise ValueError("No XMP metadata found; ")
             
             desc = xmp_data['xmpmeta']['RDF']['Description']
 
