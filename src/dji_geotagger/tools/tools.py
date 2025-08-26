@@ -239,3 +239,36 @@ def transform_coordinates(
             df = df.drop(columns=["x_ecef", "y_ecef", "z_ecef", "sd_x_ecef", "sd_y_ecef", "sd_z_ecef", "cov_ecef_flat"], errors="ignore")
             
     return df
+
+
+def pause_for_PPP_sum_file():
+    input("\n[PAUSE] If you already have a CSRS-PPP .sum file, enter its full path.\n[PAUSE] Otherwise, press Enter to skip and continue PPK without .sum file.")
+    ppp_sum_file = None
+    while True:
+        try:
+            user_in = input("Path to PPP .sum (or press Enter to skip): ").strip()
+        except KeyboardInterrupt:
+            print("\n[INFO] Interrupted by user.")
+            raise
+
+        if user_in == "":
+            print("[INFO] Skipping PPP .sum; running PPK with base station only.")
+            break
+
+        p = Path(user_in).expanduser().resolve()
+        if p.exists() and p.suffix.lower() == ".sum":
+            ppp_sum_file = p
+            print(f"[INFO] Using PPP .sum file: {ppp_sum_file}")
+            break
+        else:
+            print("[WARN] Invalid path or not a .sum file. Try again, or press Enter to skip.")
+
+    return ppp_sum_file
+
+
+def save_csv(final_df: pd.DataFrame):
+    import datetime
+    output_csv = Path(f"geotag_output/geotagged_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    final_df.to_csv(output_csv, index=False)
+    print(f"[INFO] Exported geotagged data to: {output_csv}")

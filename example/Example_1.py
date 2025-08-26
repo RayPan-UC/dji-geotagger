@@ -1,11 +1,9 @@
 from pathlib import Path
-import datetime
 from pyproj import CRS
 from dji_geotagger import *
 
 # === User-defined project path ===
 project_root = Path(r"/path/to/your/project/SynopticSite1")
-ppp_sum_file = project_root / "base_data" / "DRTK" / "PPP_result" / "DRTK3_0006_20250513073737_8PHDMCM00A1369.sum"
 
 # === Clean temporary directories ===
 clean_temp_dirs()
@@ -22,6 +20,11 @@ rover_dir = raw_to_rinex_batch(
     input_dir=project_root,
     type="rover"
 )
+
+# === Pause here to process base .sum file if available ===
+
+ppp_sum_file = pause_for_PPP_sum_file()
+
 
 # === Post-process PPK with base .sum file ===
 process_ppk(
@@ -40,20 +43,17 @@ final_df = load_and_compute_camera_positions(
     base_sum_file=ppp_sum_file
 )
 
-# === Transform to target coordinate system (e.g., NAD83 / UTM zone 12N) ===
-target_crs = 26912
+# === Transform to target coordinate system (e.g., WGS84/UTM) ===
+target_crs = 32612
 final_df = transform_coordinates(
     final_df,
     target_crs=CRS.from_user_input(target_crs),
-    out_x="E_NAD83",
-    out_y="N_NAD83",
-    out_z="H_NAD83",
+    out_x="Easting",
+    out_y="Northing",
+    out_z="Height_Ellp",
     cov_ecef2enu=True,
     drop_original=True
 )
 
 # === Save result as CSV ===
-output_csv = Path(f"geotag_output/geotagged_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-output_csv.parent.mkdir(parents=True, exist_ok=True)
-final_df.to_csv(output_csv, index=False)
-print(f"[INFO] Exported geotagged data to: {output_csv}")
+save_csv(final_df)

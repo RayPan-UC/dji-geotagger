@@ -1,6 +1,7 @@
 
 from pathlib import Path
 import numpy as np
+from dji_geotagger.tools.tools import pause_for_PPP_sum_file
 
 
 def sum_file_parser(sum_file_path: Path):

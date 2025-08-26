@@ -2,7 +2,7 @@
 
 **A precise PPK + MRK-based geotagging tool for DJI RTK drones**
 
-This Python library enables centimetre-level camera geotagging by combining PPK `.pos` solutions, DJI `.MRK` gimbal offset corrections, and EXIF/XMP metadata from DJI RTK drone images. It is designed for photogrammetry and remote sensing workflows that require accurate EOPs without using ground control points (GCPs).
+This Python library enables centimetre-level camera geotagging by combining PPK `.pos` solutions, DJI `.MRK` gimbal offset corrections, and EXIF/XMP metadata from DJI RTK drone images. It is designed for photogrammetry and remote sensing workflows that require accurate EOPs.
 
 ## Features
 
@@ -18,37 +18,24 @@ This Python library enables centimetre-level camera geotagging by combining PPK 
 ```bash
 git clone https://github.com/RayPan-UC/dji-geotagger.git
 cd dji-geotagger
-pip install -r requirements.txt
 pip install dji-geotagger
 ```
 
 ## Dependencies
 
 - Python ≥ 3.9
--  `pillow`, `defusedxml`, `pandas`, `numpy`, `pyproj`, `tqdm`
+- `pillow`, `defusedxml`, `pandas`, `numpy`, `pyproj`, `tqdm`
 - RTKLIB (`convbin.exe`, `rnx2rtkp.exe`)
 
 ## Workflow Overview
 
-1. **Convert raw GNSS to RINEX**  
-   Uses RTKLIB `convbin` for both base and rover logs.
-
-2. **Download precise IGS ephemeris**  
-   Automatically fetch `.sp3` and `.clk` based on RINEX timestamps.
-
-3. **Run PPK**  
-   Batch PPK processing using `rnx2rtkp` with optional override base coordinates from PPP `.sum` file.
-
-4. **Parse image EXIF/XMP metadata**  
-   Extracts capture time, attitude, and gimbal orientation.
-
-5. **Parse MRK files**  
-   Converts NED to ENU, then ENU → ECEF correction vectors.
-
-6. **Interpolate camera center**  
-   Matches MRK by time, interpolates PPK positions, applies gimbal offset.
-
-7. **Export results**  
+1. **Convert raw GNSS to RINEX**Uses RTKLIB `convbin` for both base and rover logs.
+2. **Download precise IGS ephemeris**Automatically fetch `.sp3` and `.clk` based on RINEX timestamps.
+3. **Run PPK**Batch PPK processing using `rnx2rtkp` with optional override base coordinates from PPP `.sum` file.
+4. **Parse image EXIF/XMP metadata**Extracts capture time, attitude, and gimbal orientation.
+5. **Parse MRK files**Converts NED to ENU, then ENU → ECEF correction vectors.
+6. **Interpolate camera center**Matches MRK by time, interpolates PPK positions, applies gimbal offset.
+7. **Export results**
    Generates a DataFrame (or CSV) of corrected positions and attitude per image.
 
 ## Example Usage
@@ -117,36 +104,35 @@ print(f"[INFO] Exported geotagged data to: {output_csv}")
 
 ## Output Format
 
-
 The output CSV contains the following columns:
 
-| Column Name           | Description |
-|------------------------|-------------|
-| `file_name`           | Image file name |
-| `gps_week`            | GPS week number |
-| `gps_time`            | Seconds into the GPS week |
-| `sd_x_ecef`           | Standard deviation in ECEF X (metres) |
-| `sd_y_ecef`           | Standard deviation in ECEF Y (metres) |
-| `sd_z_ecef`           | Standard deviation in ECEF Z (metres) |
-| `cov_ecef_flat`       | Flattened 3×3 ECEF covariance matrix (row-major, space-separated) |
-| `flight_roll`         | Aircraft body roll (degrees) |
-| `flight_pitch`        | Aircraft body pitch (degrees) |
-| `flight_yaw`          | Aircraft body yaw (degrees) |
-| `gimbal_roll`         | Gimbal-reported roll (degrees) |
-| `gimbal_pitch`        | Gimbal-reported pitch (degrees) |
-| `gimbal_yaw`          | Gimbal-reported yaw (degrees) |
-| `dji_geotagger_roll`  | Corrected camera roll for photogrammetry (degrees), with gimbal lock handling |
+| Column Name             | Description                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| `file_name`           | Image file name                                                                        |
+| `gps_week`            | GPS week number                                                                        |
+| `gps_time`            | Seconds into the GPS week                                                              |
+| `sd_x_ecef`           | Standard deviation in ECEF X (metres)                                                  |
+| `sd_y_ecef`           | Standard deviation in ECEF Y (metres)                                                  |
+| `sd_z_ecef`           | Standard deviation in ECEF Z (metres)                                                  |
+| `cov_ecef_flat`       | Flattened 3×3 ECEF covariance matrix (row-major, space-separated)                     |
+| `flight_roll`         | Aircraft body roll (degrees)                                                           |
+| `flight_pitch`        | Aircraft body pitch (degrees)                                                          |
+| `flight_yaw`          | Aircraft body yaw (degrees)                                                            |
+| `gimbal_roll`         | Gimbal-reported roll (degrees)                                                         |
+| `gimbal_pitch`        | Gimbal-reported pitch (degrees)                                                        |
+| `gimbal_yaw`          | Gimbal-reported yaw (degrees)                                                          |
+| `dji_geotagger_roll`  | Corrected camera roll for photogrammetry (degrees), with gimbal lock handling          |
 | `dji_geotagger_pitch` | Corrected camera pitch for photogrammetry (degrees), computed as `gimbal_pitch + 90` |
-| `dji_geotagger_yaw`   | Camera yaw for photogrammetry (degrees), taken directly from `flight_yaw` |
-| `E_NAD83`             | Easting in NAD83 / UTM Zone 12N (metres) |
-| `N_NAD83`             | Northing in NAD83 / UTM Zone 12N (metres) |
-| `H_NAD83`             | Height in NAD83 ellipsoidal coordinates (metres) |
-| `sd_E`                | Standard deviation in Easting (ENU, metres) |
-| `sd_N`                | Standard deviation in Northing (ENU, metres) |
-| `sd_U`                | Standard deviation in Up (ENU, metres) |
-| `cov_enu_flat`        | Flattened 3×3 ENU covariance matrix (row-major, space-separated) |
+| `dji_geotagger_yaw`   | Camera yaw for photogrammetry (degrees), taken directly from `flight_yaw`            |
+| `Easting`             | Easting in WGS84 / UTM Zone 12N (metres)                                               |
+| `Northing`            | Northing in WGS84 / UTM Zone 12N (metres)                                              |
+| `Height_Ellp`         | Height in WGS84 ellipsoidal coordinates (metres)                                       |
+| `sd_E`                | Standard deviation in Easting (ENU, metres)                                            |
+| `sd_N`                | Standard deviation in Northing (ENU, metres)                                           |
+| `sd_U`                | Standard deviation in Up (ENU, metres)                                                 |
+| `cov_enu_flat`        | Flattened 3×3 ENU covariance matrix (row-major, space-separated)                      |
 
-Note: The projected coordinates (`E_NAD83`, `N_NAD83`, `H_NAD83`) are output in NAD83 / UTM Zone 12N by default. Users can customize the coordinate reference system (CRS) and output column formats according to their project requirements.
+Note: The projected coordinates (`Easting`, `Northing`, `Height`) are output in WGS84 / UTM Zone 12N by default. Users can customize the coordinate reference system (CRS) and output column formats according to their project requirements.
 
 ## License
 
