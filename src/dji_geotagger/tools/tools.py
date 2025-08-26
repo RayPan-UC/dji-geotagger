@@ -246,7 +246,7 @@ def pause_for_PPP_sum_file():
     ppp_sum_file = None
     while True:
         try:
-            user_in = input("Path to PPP .sum (or press Enter to skip): ").strip()
+            user_in = input("Path to PPP .sum (or press Enter to skip): ").strip().strip('"')
         except KeyboardInterrupt:
             print("\n[INFO] Interrupted by user.")
             raise
