@@ -52,16 +52,16 @@ project_root = Path(r"/path/to/your/project/SynopticSite1")
 clean_temp_dirs()
 
 # === Convert base and rover raw logs to RINEX ===
-base_obs, base_nav = raw_to_rinex_batch(
-    keywords=['20250513', '0006', 'DRTK', '.dat'],
-    input_dir=project_root,
-    type="base",
-)
-
 rover_dir = raw_to_rinex_batch(
     keywords=['20250513', 'PPKRAW', '.bin'],
     input_dir=project_root,
     type="rover"
+)
+
+base_obs, base_nav = raw_to_rinex_batch(
+    keywords=['20250513', '0006', 'DRTK', '.dat'],
+    input_dir=project_root,
+    type="base",
 )
 
 # === Pause here to process base .sum file if available ===

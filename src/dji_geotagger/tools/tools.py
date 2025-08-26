@@ -242,7 +242,7 @@ def transform_coordinates(
 
 
 def pause_for_PPP_sum_file():
-    input("\n[PAUSE] If you already have a CSRS-PPP .sum file, enter its full path.\n[PAUSE] Otherwise, press Enter to skip and continue PPK without .sum file.")
+    print("\n[PAUSE] If you already have a CSRS-PPP .sum file, enter its full path.\n[PAUSE] Otherwise, press Enter to skip and continue PPK without .sum file.")
     ppp_sum_file = None
     while True:
         try:
