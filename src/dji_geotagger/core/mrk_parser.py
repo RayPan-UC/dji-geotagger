@@ -1,5 +1,5 @@
 
-from numpy import sin, cos, arcsin, arctan2, sqrt, degrees, radians, sign, atan2, asin, pi
+from numpy import radians
 import pandas as pd
 from pathlib import Path
 from dji_geotagger.tools.tools import vector_enu_to_ecef
