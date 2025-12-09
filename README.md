@@ -1,4 +1,4 @@
-# DJI Geotagger
+# DJI Geotagger [![Downloads](https://static.pepy.tech/badge/dji-geotagger)](https://pepy.tech/project/dji-geotagger)
 
 **A precise PPK + MRK-based geotagging tool for DJI RTK drones**
 
@@ -17,7 +17,6 @@ This Python library enables centimetre-level camera geotagging by combining PPK 
 
 ```bash
 git clone https://github.com/RayPan-UC/dji-geotagger.git
-cd dji-geotagger
 pip install dji-geotagger
 ```
 
@@ -29,14 +28,13 @@ pip install dji-geotagger
 
 ## Workflow Overview
 
-1. **Convert raw GNSS to RINEX**Uses RTKLIB `convbin` for both base and rover logs.
-2. **Download precise IGS ephemeris**Automatically fetch `.sp3` and `.clk` based on RINEX timestamps.
-3. **Run PPK**Batch PPK processing using `rnx2rtkp` with optional override base coordinates from PPP `.sum` file.
-4. **Parse image EXIF/XMP metadata**Extracts capture time, attitude, and gimbal orientation.
-5. **Parse MRK files**Converts NED to ENU, then ENU → ECEF correction vectors.
-6. **Interpolate camera center**Matches MRK by time, interpolates PPK positions, applies gimbal offset.
-7. **Export results**
-   Generates a DataFrame (or CSV) of corrected positions and attitude per image.
+1. **Convert raw GNSS to RINEX** Uses RTKLIB `convbin` for both base and rover logs.
+2. **Download precise IGS ephemeris** Automatically fetch `.sp3` and `.clk` based on RINEX timestamps.
+3. **Run PPK** Batch PPK processing using `rnx2rtkp` with optional override base coordinates from PPP `.sum` file.
+4. **Parse image EXIF/XMP metadata** Extracts capture time, attitude, and gimbal orientation.
+5. **Parse MRK files** Converts NED to ENU, then ENU to ECEF correction vectors.
+6. **Interpolate camera centre** Matches MRK by time, interpolates PPK positions, applies gimbal offset.
+7. **Export results** Generates a DataFrame (or CSV) of corrected positions and attitude per image.
 
 ## Example Usage
 
