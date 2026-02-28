@@ -10,7 +10,6 @@ def raw2rinex(
     output_dir: str = None,
     antenna_height_in_meter: float = 0.0,
     appr_time: str = None,
-    print_ppp_help: bool = False,
     RTKLIB: str = None,
     ) -> Path:
     """
@@ -27,10 +26,8 @@ def raw2rinex(
     antenna_height_in_meter : float
         Antenna height (m). If <=0 or None-like, treated as 0.0
     appr_time : Optional[str]
-        Approx time in "YYYY/MM/DD HH:MM:SS".
+        Approx time in "YYYYMMDD HHMM" (UTC).
         If None, try parse from filename token "YYYYmmddHHMMSS" or "YYYYmmddHHMM".
-    print_ppp_help : bool
-        If True, call PPP_help(obs_path).
     RTKLIB: str = None,
 
     Returns
@@ -52,10 +49,10 @@ def raw2rinex(
     # User input (appr_time)
     if appr_time:
         try:
-            dt = datetime.strptime(appr_time, "%Y/%m/%d %H:%M:%S")
+            dt = datetime.strptime(appr_time, "%Y%m%d %H%M")
         except ValueError:
             raise ValueError(
-                "[ERROR] `appr_time` must be in format YYYY/MM/DD HH:MM:SS"
+                "[ERROR] `appr_time` must be in format YYYYMMDD HHMM"
             )
     else:
         # parse from filename tokens
@@ -69,8 +66,8 @@ def raw2rinex(
 
         if dt is None:
             raise ValueError(
-                "[ERROR] No valid timestamp found in filename. "
-                "Please provide `appr_time` manually in format YYYY/MM/DD HH:MM:SS."
+                "[ERROR] No valid timestamp found in filename."
+                "Please provide `appr_time` manually in format YYYYMMDD HHMM."
             )
     
     # User inputs (output_dir)
@@ -86,7 +83,7 @@ def raw2rinex(
     else:
         raise ValueError(f"[ERROR] Unsupported file extension: {suffix} (expect .bin or .dat)")
 
-    rinex_dir = base_out / "RINEX" / type_dir
+    rinex_dir = base_out / "DGT_output" / "RINEX" / type_dir
     rinex_dir.mkdir(parents=True, exist_ok=True)
 
     file_name = input_path.stem
@@ -117,8 +114,10 @@ def raw2rinex(
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"[ERROR] Failed to convert {input_path}") from e
     
-    if print_ppp_help:
+    if type_dir == "base":
         PPP_help(obs_path)
+        create_PPP_folder_structure(base_out)
+    
 
     return obs_path, nav_path
     
@@ -137,27 +136,37 @@ def PPP_help(obs_path:Path):
         return
     last_epoch = times[-1].astype("datetime64[ms]").astype(datetime).replace(tzinfo=timezone.utc)
 
+    # end of day (UTC)
+    end_of_day = last_epoch.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    # end of week (UTC Sunday)
+    days_until_sunday = (6 - last_epoch.weekday()) % 7
+    end_of_week = last_epoch.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=days_until_sunday + 1)
+
+    rapid_available     = end_of_day  + timedelta(hours=18)
+    final_available     = end_of_week + timedelta(days=14)
+    
     now_utc = datetime.now(timezone.utc)
-    age = now_utc - last_epoch
-    if age >= timedelta(days=15):
+
+    if now_utc >= final_available:
         current_available = "FINAL"
-    elif age >= timedelta(hours=18):
+    elif now_utc >= rapid_available:
         current_available = "RAPID"
-    elif age >= timedelta(hours=2):
+    elif now_utc >= last_epoch + timedelta(hours=2):
         current_available = "ULTRA-RAPID"
     else:
         current_available = "NOT-YET"
 
-    estimated_final_time = last_epoch + timedelta(days=15)
-    estimated_final_local = estimated_final_time.astimezone()
 
-    
     if current_available != "FINAL":
         print(f"""
 [HINT] CSRS-PPP Product Tier Estimate: {current_available}
         TIME OF LAST OBS: {last_epoch.strftime('%Y-%m-%d %H:%M UTC')}
-        Estimated FINAL availability (UTC): {estimated_final_time.strftime('%Y-%m-%d %H:%M UTC')}
-        Estimated FINAL availability (Local): {estimated_final_local.strftime('%Y-%m-%d %H:%M')}
+        Estimated FINAL availability: {final_available.strftime('%Y-%m-%d %H:%M UTC')}
+
+        NRCan Product:
+        - Ultra-rapid: ~1–2 hours after last epoch
+        - Rapid: ~17–18 hours after end of day (UTC)
+        - Final: ~12–15 days after end of week (UTC Sunday)
         """)
     else:
         print(f"""
@@ -166,14 +175,55 @@ def PPP_help(obs_path:Path):
         - Product Tier Estimate: {current_available}
 
         - https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php
-            1. Upload the `.obs` file
-            2. Enter your email address to receive results
+            1. Upload your .obs file
+            2. Enter your email address
+            3. Download the result file when processing completes 
+            4. Place the PPP result file in PPP folder for PPK process
 
         - Recommended options:
                 1. Positioning mode: Static
                 2. Coordinate system: ITRF
         
+        - 
+        
         Processing takes ~5–30 minutes depending on data length.
             """)
 
-    
+
+def create_PPP_folder_structure(base_out: Path):
+    """
+    Create PPP folder structure for a specific dataset.
+
+    DGT_output/
+        PPP/
+            README.txt
+            <file_name>/
+                (user drops PPP result here)
+    """
+
+
+    # Create PPP project folder
+    ppp_root = base_out / "DGT_output" / "RINEX" / "base" / "PPP"
+    ppp_root.mkdir(parents=True, exist_ok=True)
+
+    # Create instruction file INSIDE project folder
+    instruction_file = ppp_root / "README.txt"
+
+    if not instruction_file.exists():
+        instruction_file.write_text(
+            "DJI-Geotagger PPP Processing Folder\n"
+            "====================================\n\n"
+            "Step 1: Upload the RINEX (.obs) file to CSRS-PPP\n"
+            "Website:\n"
+            "https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php\n\n"
+            "Recommended settings:\n"
+            "  - Positioning Mode: Static\n"
+            "  - Coordinate System: ITRF\n\n"
+            "Step 2: Download the PPP result file (.pos / .sum / .csv)\n"
+            "Step 3: Place the PPP result file in THIS folder\n\n"
+            "After that, continue processing with DJI-Geotagger.\n",
+            encoding="utf-8"
+        )
+
+    print(f"[HINT] Please place the PPP result (.sum) in {ppp_root}")
+
