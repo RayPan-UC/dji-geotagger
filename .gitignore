@@ -10,7 +10,7 @@ __pycache__/
 *.egg-info/
 .venv/
 test/
-tools/RTKLIB/bin/
+**/RTKLIB/bin/
 dev/
 
 # Jupyter / temporary files
