@@ -8,6 +8,10 @@ __pycache__/
 **/temp/
 **/dist/
 *.egg-info/
+.venv/
+test/
+tools/RTKLIB/bin/
+dev/
 
 # Jupyter / temporary files
 *.ipynb_checkpoints
