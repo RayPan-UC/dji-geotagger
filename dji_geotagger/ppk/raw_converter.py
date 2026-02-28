@@ -17,8 +17,7 @@ def raw2rinex(
     - .bin -> rover (UAV)
     - .dat -> base
 
-    Parameters
-    ----------
+    Parameters:
     input_path : Path
         Raw GNSS file path (.bin / .dat)
     output_dir : Optional[Path]
@@ -30,8 +29,7 @@ def raw2rinex(
         If None, try parse from filename token "YYYYmmddHHMMSS" or "YYYYmmddHHMM".
     RTKLIB: str = None,
 
-    Returns
-    -------
+    Returns:
     (obs_path, nav_path) : Tuple[Path, Path]
     """
     # Check file exist
