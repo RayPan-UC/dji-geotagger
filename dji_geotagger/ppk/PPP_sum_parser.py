@@ -81,10 +81,10 @@ def sum_file_parser(sum_file_path: Path):
                         [ rho_XZ,  rho_YZ,     1.0]
                     ])
     # Covariance Matrix (ECEF)
-    cov_ECEF = np.diag(sigma) @ corr @ np.diag(sigma)
+    cov_PPP_ECEF = np.diag(sigma) @ corr @ np.diag(sigma)
 
     # Covariance Matrix (ENU)
-    cov_ENU = ECEF2ENU(cov_ecef=cov_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
+    cov_PPP_ENU = ECEF2ENU(cov_ecef=cov_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
     sigma_ENU = np.sqrt(np.diag(cov_ENU))
 
     # Summary
@@ -101,7 +101,7 @@ def sum_file_parser(sum_file_path: Path):
         "lon_dd": lon_dd,
         "hgt": hgt,
         "coord_sys": coord_sys,
-        "cov_ECEF": cov_ECEF,
-        "cov_ENU": cov_ENU,
+        "cov_PPP_ECEF": cov_PPP_ECEF,
+        "cov_PPP_ENU": cov_PPP_ENU,
         "sigma_ENU": sigma_ENU,
     }
