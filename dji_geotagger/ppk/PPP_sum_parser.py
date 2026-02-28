@@ -8,6 +8,11 @@ def sum_file_parser(sum_file_path: Path):
     """
     Parse CSRS-PPP .sum file to extract final estimated ECEF position and covariance matrix.
 
+    I also compared the result between PPP report and pymap3d transformation:
+    [INFO] Base LLH               : (55.2942365333°, -114.6254905917°, 560.7136000000 m)
+    [INFO] Base LLH (pymap3d)     : (55.2942365320°, -114.6254905912°, 560.7135461102 m)
+    * The difference is at the sub-millimeter level. Both are absolutely reliable.
+
     Parameters:
         sum_file_path : path to .sum file
 
@@ -26,7 +31,7 @@ def sum_file_parser(sum_file_path: Path):
     est_X = est_Y = est_Z = None
     sigma_X = sigma_Y = sigma_Z = None
     rho_XY = rho_XZ = rho_YZ = None
-    lat = lon = hgt = None
+    lat_dd = lon_dd = hgt = None
 
     with open(sum_file_path, "r", encoding="utf-8") as f:
         for line in f:
