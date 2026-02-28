@@ -10,7 +10,7 @@ DEFAULT_PPK_CONF = {
         "pos1-snrmask_L5": "0,0,0,0,0,0,0,0,0",   #
         "pos1-dynamics": "off",   # (0:off,1:on)
         "pos1-tidecorr": "off",   # (0:off,1:on,2:otl)
-        "pos1-ionoopt": "dual-freq",   # (0:off,1:brdc,2:sbas,3:dual-freq,4:est-stec,5:ionex-tec,6:qzs-brdc)
+        "pos1-ionoopt": "off",   # (0:off,1:brdc,2:sbas,3:dual-freq,4:est-stec,5:ionex-tec,6:qzs-brdc)
         "pos1-tropopt": "saas",   # (0:off,1:saas,2:sbas,3:est-ztd,4:est-ztdgrad)
         "pos1-sateph": "precise",   # (0:brdc,1:precise,2:brdc+sbas,3:brdc+ssrapc,4:brdc+ssrcom)
         "pos1-posopt1": "off",   # (0:off,1:on)

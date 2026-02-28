@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
-from dji_geotagger.tools.tools import utc_to_gps
+from dji_geotagger.tools.tools import utc2gps
 
 def correct_dji_gimbal_lock(roll: float, pitch: float, yaw: float) -> tuple[float, float, float]:
     """

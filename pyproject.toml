@@ -14,7 +14,8 @@ dependencies = [
   "pyproj",
   "tqdm",
   "requests",
-  "georinex"
+  "georinex",
+  "astropy"
 ]
 
 classifiers = [

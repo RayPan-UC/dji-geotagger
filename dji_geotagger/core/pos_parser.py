@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from numpy import sign
 from tqdm import tqdm
-from dji_geotagger.core.PPP_sum_parser import sum_file_parser
+from dji_geotagger.ppk.PPP_sum_parser import sum_file_parser
 
 
 def combine_all_pos(

@@ -1,22 +1,30 @@
 from pathlib import Path
 import subprocess
-from tqdm import tqdm
-import numpy as np
-from dji_geotagger.ppk.ephemeris_downloader import try_download_igs_data
-from dji_geotagger.core.PPP_sum_parser import sum_file_parser
 from dji_geotagger.tools.install_RTKLIB import get_rtklib_executable
-from dji_geotagger.config.import_config import import_rtklib_config
+from dji_geotagger.ppk.ephemeris_downloader import download_igs_data
+from dji_geotagger.ppk.PPP_sum_parser import sum_file_parser
+from dji_geotagger.config.import_config import override_rtklib_config
 
+# for PPK process
+# We need:
+# 1) Base: OBS and PPP result position
+# 2) Rover: OBS
+# 3) Ephemeris: CLK/SP3
+# 4) RTKLIB ppk config
 
 def process_ppk(
-    base_obs: Path,
-    base_nav: Path,
-    rover_dir: Path,
-    ephemeris_files: list[Path] = None,
-    output_dir: Path = Path(r"temp\ppk_result"),
-    override_base_from_sum_file: Path = None,
-    conf_override: dict = None,
-    rnx2rtkp: Path = None
+    base_obs: str,
+    base_nav: str,
+    rover_dir: str,
+    base_PPP_sum: str = None,
+    user_conf: dict = {},
+    ephemeris_files: list[str] = None,
+
+    output_dir: Path = None,
+
+
+    
+    RTKLIB: Path = None
 ) -> Path:
     """
     Batch process RTKLIB PPK solution for a directory of rover OBS files.
@@ -42,75 +50,70 @@ def process_ppk(
     Returns:
         Path: Path to the output directory containing all generated .pos files.
     """
+    
+
+    # Check input
+    base_obs = Path(base_obs)
+    base_nav = Path(base_nav)
+    rover_dir = Path(rover_dir)
+    base_PPP_sum = Path(base_PPP_sum) if base_PPP_sum else Path.cwd() / "DGT_output" / "RINEX" / "base" / "PPP" / f"{base_obs.stem}.sum"
+    ephemeris_files = [Path(p) for p in ephemeris_files] if ephemeris_files else None
+    output_dir = Path(output_dir) if output_dir else Path.cwd() / "DGT_output" / "PPK_result"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+
+    # Check files exist
+    for file in [base_obs, base_nav, base_PPP_sum]:
+        if file and not file.exists():
+            raise FileNotFoundError(f"[ERROR] File not found: {file}")
+
+    if ephemeris_files:
+        for file in ephemeris_files:
+            if not file.exists():
+                raise FileNotFoundError(f"[ERROR] Ephemeris file not found: {file}")
+
     # Check rnx2rtkp
-    if rnx2rtkp is None:
-        rnx2rtkp = get_rtklib_executable("rnx2rtkp")
-
-    if not rnx2rtkp.exists():
-        success = download_RTKLIB_instruction(rnx2rtkp)
-        if success:
-            # After download, recheck
-            rnx2rtkp = get_rtklib_executable("rnx2rtkp")
-            if not rnx2rtkp.exists():
-                raise FileNotFoundError(f"[FATAL] RTKLIB tool still not found: {rnx2rtkp}")
+    rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB)
             
+
     # Handle base station configuration
-    if override_base_from_sum_file:
+    # 1. If PPP .sum file provided
+    if base_PPP_sum:
         # Priority: Use PPP .sum file for base coordinates
-        X, Y, Z, lat, lon, hgt, cor_sys, cov_ecef = sum_file_parser(override_base_from_sum_file)
-
-        if cor_sys not in ["IGb20", "IGS20", "ITRF2020", "IGS14", "ITRF2014"]:
-            raise ValueError(f"[ERROR] Unexpected coordinate system '{cor_sys}' in sum file.")
-
-        print(f"[INFO] Base ECEF (from .sum): ({X:.3f}, {Y:.3f}, {Z:.3f})")
-        print(f"[INFO] Base LLH: ({np.degrees(lat):.5f}°, {np.degrees(lon):.5f}°, {hgt:.3f} m)")
-        print(f"[INFO] Base RMS error (1σ): {np.sqrt(np.diag(cov_ecef))}")
-
-        # Use coordinates from sum file unless overridden
+        PPP_result = sum_file_parser(base_PPP_sum)
         base_conf = {
             "ant2-postype": "xyz",
-            "ant2-pos1": f"{X:.4f}",
-            "ant2-pos2": f"{Y:.4f}",
-            "ant2-pos3": f"{Z:.4f}"
+            "ant2-pos1": PPP_result.get("X"),
+            "ant2-pos2": PPP_result.get("Y"),
+            "ant2-pos3": PPP_result.get("Z")
         }
+    
+        # If user config provided
+        user_conf.update(base_conf)
+        conf_file = override_rtklib_config(user_conf)
 
-        # Merge additional user config (ignore ant2-posX overrides)
-        if conf_override:
-            for key, val in conf_override.items():
-                if not key.startswith("ant2-pos"):
-                    base_conf[key] = val
-
-        conf_file = import_rtklib_config(base_conf)
+    
 
     else:
-        # No sum file: use provided overrides only
-        if conf_override is None:
-            raise ValueError("[ERROR] No base position provided. Either set `override_base_from_sum_file` or `conf_override` with ant2-pos1/2/3.")
-
+        if not user_conf:
+            raise ValueError(no_base_pos_warn())
         print("[INFO] Using manual base coordinates from conf_override.")
-        conf_file = import_rtklib_config(conf_override)
+        conf_file = override_rtklib_config(user_conf)
+
+
     
 
     # Download ephemeris data (.clk and .sp3)
     if not ephemeris_files:
-        ephemeris_files = try_download_igs_data(base_obs_path=base_obs)
-        if not ephemeris_files:
-            print("[WARNING] Failed to download ephemeris data (.sp3 / .clk).")
-            print("[INFO] You can manually download them from:")
-            print("        https://igs.org/products/#orbits_clocks")
-            print("        (Look under FINAL or RAPID products for your observation date)")
-            print("        (For GPS week and date, you can check: https://webapp.csrs-scrs.nrcan-rncan.gc.ca/geod/tools-outils/calendr.php)")
-            return
+        ephemeris_files = download_igs_data(base_obs_path=base_obs)
     
     # Print rover file count
-    obs_files = list(rover_dir.glob("*.obs"))
+    obs_files = sorted(rover_dir.glob("*.obs"))
     print(f"\n======= {len(obs_files)} .obs files were found. Start PPK calculation now... =======")
 
 
     # start ppk
-    for rover_obs in sorted(rover_dir.glob("*.obs")):
+    for rover_obs in obs_files:
         output_pos = output_dir / f"{rover_obs.stem}.pos"
 
         if output_pos.exists():
@@ -139,6 +142,27 @@ def process_ppk(
             print(f"[ERROR] Failed to process: {rover_obs.name}")
 
     # Note for PPK
-    print("[NOTE] Although RTKLIB .pos file output labels coordinates as 'WGS84', the actual reference frame corresponds to the IGS20 realization (i.e., aligned with ITRF), as determined by the SP3/CLK products used.")
+    print("[NOTE] Although RTKLIB labels output coordinates as 'WGS84', the actual reference frame "
+        "is determined by the SP3/CLK products used. "
+        "(e.g., IGS FINAL products are referenced to IGS20, "
+        "which is consistent with ITRF2020 at the mm level.)")
 
     return output_dir
+
+def no_base_pos_warn():
+    return("""
+[ERROR] No base position provided.
+        Please provide base coordinates via one of the following methods:
+        
+          Option 1 - Provide a CSRS-PPP .sum file (recommended):
+              process_ppk(..., base_PPP_sum='path/to/result.sum')
+        
+          Option 2 - Manually specify ECEF coordinates via user_conf:
+              user_conf = {
+                  'ant2-postype': 'xyz',
+                  'ant2-pos1': -2418456.789,  # X (metres)
+                  'ant2-pos2':  5385936.123,  # Y (metres)
+                  'ant2-pos3':  2405716.456,  # Z (metres)
+              }
+              process_ppk(..., user_conf=user_conf)
+    """)

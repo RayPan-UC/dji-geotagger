@@ -1,15 +1,15 @@
 from pathlib import Path
 from datetime import datetime
+import pandas as pd
 import datetime as dt
 import requests
 import gzip
 import shutil
 import time
 import georinex as gr
-from dji_geotagger.tools.tools import utc_to_gps
+from dji_geotagger.tools.tools import utc2gps
 
 
-##########################################################################################
 def parse_obs_time_range(obs_file: Path) -> tuple[datetime, datetime]:
     """
     Parse RINEX observation file to extract TIME OF FIRST/LAST OBS as datetime objects.
@@ -17,8 +17,8 @@ def parse_obs_time_range(obs_file: Path) -> tuple[datetime, datetime]:
     times = gr.gettime(obs_file)
     if len(times) < 2:
         raise ValueError("[ERROR] Not enough epochs in obs file.")
-    t_start = times[0].astype("datetime64[ms]").astype(datetime)
-    t_end   = times[-1].astype("datetime64[ms]").astype(datetime)
+    t_start = pd.to_datetime(times[0], utc=True).to_pydatetime()
+    t_end   = pd.to_datetime(times[-1], utc=True).to_pydatetime()
     return t_start, t_end
 
 
@@ -77,36 +77,40 @@ def download_file(url: str, dest: Path) -> bool:
         return False
 
 
-def download_ephemeris(
+def ephemeris_downloader(
     utc_time: datetime,
     CODE_products: bool,
     type: str = "FINAL",  # or RAPID
     igs_dir: Path = Path("temp/ephemeris")
 ) -> bool:
 
-    yyyy, ddd, wwww, gps_day, gps_tow = utc_to_gps(utc_time)
+    gps_time_dict = utc2gps(utc_time)
+    yyyy = gps_time_dict.get("yyyy")
+    wwww = gps_time_dict.get("gps_week")
+    ddd = gps_time_dict.get("ddd")
+
     dest_files = []
 
     if type == "FINAL":
         urls = [
-            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSFIN_{yyyy}{ddd:03d}0000_01D_15M_ORB.SP3.gz",
-            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSFIN_{yyyy}{ddd:03d}0000_01D_30S_CLK.CLK.gz"
+            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSFIN_{yyyy}{ddd}0000_01D_15M_ORB.SP3.gz",
+            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSFIN_{yyyy}{ddd}0000_01D_30S_CLK.CLK.gz"
         ]
         if CODE_products:
             urls += [
-                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSFIN_{yyyy}{ddd:03d}0000_01D_05M_ORB.SP3.gz",
-                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSFIN_{yyyy}{ddd:03d}0000_01D_05S_CLK.CLK.gz"
+                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSFIN_{yyyy}{ddd}0000_01D_05M_ORB.SP3.gz",
+                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSFIN_{yyyy}{ddd}0000_01D_05S_CLK.CLK.gz"
             ]
 
     elif type == "RAPID":
         urls = [
-            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSRAP_{yyyy}{ddd:03d}0000_01D_15M_ORB.SP3.gz",
-            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSRAP_{yyyy}{ddd:03d}0000_01D_05M_CLK.CLK.gz"
+            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSRAP_{yyyy}{ddd}0000_01D_15M_ORB.SP3.gz",
+            f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSRAP_{yyyy}{ddd}0000_01D_05M_CLK.CLK.gz"
         ]
         if CODE_products:
             urls += [
-                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSRAP_{yyyy}{ddd:03d}0000_01D_05M_ORB.SP3.gz",
-                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSRAP_{yyyy}{ddd:03d}0000_01D_30S_CLK.CLK.gz"
+                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSRAP_{yyyy}{ddd}0000_01D_05M_ORB.SP3.gz",
+                f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSRAP_{yyyy}{ddd}0000_01D_30S_CLK.CLK.gz"
             ]
 
     for url in urls:
@@ -119,8 +123,8 @@ def download_ephemeris(
 
 
 def download_igs_data(
-    base_obs_path: Path,
-    igs_dir: Path,
+    base_obs_path: str,
+    igs_dir: Path = None,
     CODE_products: bool = True
 ) -> str:
     """
@@ -129,7 +133,8 @@ def download_igs_data(
     """
 
     # input
-    igs_dir = Path.cwd() / "DGT_output" / "PPK_result"
+    base_obs_path = Path(base_obs_path)
+    igs_dir = igs_dir if igs_dir else Path.cwd() / "DGT_output" / "PPK_result" / "Ephemeris"
 
     # Parse start and end time from obs
     utc_start, utc_end = parse_obs_time_range(base_obs_path)
@@ -142,11 +147,12 @@ def download_igs_data(
         current += dt.timedelta(days=1)
 
     # Try FINAL → RAPID
-    eph_files = []
+    
     for level in ["FINAL", "RAPID"]:
         success = True
+        eph_files = []
         for d in day_list:
-            files = download_ephemeris(
+            files = ephemeris_downloader(
                 d, type=level, CODE_products=CODE_products, igs_dir=igs_dir
             )
             if not files:
@@ -162,6 +168,12 @@ def download_igs_data(
         if success:
             print(f"[INFO] All precise IGS data downloaded successfully! (Product type: {level})")
             return eph_files
+    raise RuntimeError(ephemeris_download_fail())
 
-    print(f"[WARNING] No precise IGS data found for days {day_list}, fallback to Broadcast")
-    return None
+def ephemeris_download_fail():
+    return("""
+[WARNING] Failed to download ephemeris data (.sp3 / .clk).
+            - You can manually download them from: https://igs.org/products/#orbits_clocks"
+            - Look under FINAL or RAPID products for your observation date
+            - For GPS week and date, you can check: https://webapp.csrs-scrs.nrcan-rncan.gc.ca/geod/tools-outils/calendr.php
+        """)

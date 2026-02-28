@@ -93,11 +93,6 @@ def sum_file_parser(sum_file_path: Path):
     print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
     print(f"[INFO] 1σ ENU       : E={sigma_ENU[0]*100:.2f} cm, N={sigma_ENU[1]*100:.2f} cm, U={sigma_ENU[2]*100:.2f} cm")
 
-
-    print(f"[INFO] Base ECEF (from .sum): ({est_X:.3f}, {est_Y:.3f}, {est_Z:.3f})")
-    print(f"[INFO] Base LLH: ({np.degrees(lat):.5f}°, {np.degrees(lon):.5f}°, {hgt:.3f} m)")
-    print(f"[INFO] Base RMS error (1σ): {np.sqrt(np.diag(cov_ECEF))}")
-
     return {
         "X": est_X,
         "Y": est_Y,
