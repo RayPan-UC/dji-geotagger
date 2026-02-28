@@ -84,8 +84,8 @@ def sum_file_parser(sum_file_path: Path):
     cov_PPP_ECEF = np.diag(sigma) @ corr @ np.diag(sigma)
 
     # Covariance Matrix (ENU)
-    cov_PPP_ENU = ECEF2ENU(cov_ecef=cov_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
-    sigma_ENU = np.sqrt(np.diag(cov_ENU))
+    cov_PPP_ENU = ECEF2ENU(cov_ecef=cov_PPP_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
+    sigma_ENU = np.sqrt(np.diag(cov_PPP_ENU))
 
     # Summary
     print(f"[INFO] Coord system : {coord_sys}")
