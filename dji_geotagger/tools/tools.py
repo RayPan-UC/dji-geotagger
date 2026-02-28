@@ -1,12 +1,29 @@
 from pathlib import Path
-import shutil
 import datetime as dt
 import pandas as pd
 from pyproj import Transformer, CRS
 import numpy as np
 from numpy import sin, cos
+from astropy.time import Time
 
-def utc_to_gps(dt_obj: dt.datetime):
+def ECEF2ENU(
+        cov_ecef: np.ndarray, 
+        lon_deg: float, 
+        lat_deg: float
+    ):
+
+    lon_rad = np.radians(lon_deg)
+    lat_rad = np.radians(lat_deg)
+    R = np.array([
+        [                -np.sin(lon_rad),                  np.cos(lon_rad),               0],
+        [-np.sin(lat_rad)*np.cos(lon_rad), -np.sin(lat_rad)*np.sin(lon_rad), np.cos(lat_rad)],
+        [ np.cos(lat_rad)*np.cos(lon_rad),  np.cos(lat_rad)*np.sin(lon_rad), np.sin(lat_rad)]
+    ])
+    return R @ cov_ecef @ R.T
+
+
+
+def utc2gps(dt_obj: dt.datetime):
     """
     Convert UTC datetime to:
     - Gregorian year
@@ -18,23 +35,28 @@ def utc_to_gps(dt_obj: dt.datetime):
     Returns:
         Tuple: (yyyy, ddd, gps_week, gps_day, gps_tow)
     """
-    gps_start = dt.datetime(1980, 1, 6)
-    delta = (dt_obj - gps_start).total_seconds()
+    t = Time(dt_obj, scale="utc")
+    delta = t.gps  # GPS seconds since 1980/1/6, leap seconds included
 
     gps_week = int(delta // 604800)
-    gps_tow = round(delta % 604800, 6)
+    gps_tow  = round(float(delta % 604800), 6)
 
-    # Fix gps_day: shift weekday() to GPS format
     # datetime.weekday(): Mon=0 ... Sun=6
-    # GPS: Sun=0 ... Sat=6
+    # GPS day:            Sun=0 ... Sat=6
     gps_day = (dt_obj.weekday() + 1) % 7
 
     yyyy = dt_obj.year
-    ddd = dt_obj.timetuple().tm_yday
+    ddd  = dt_obj.timetuple().tm_yday
 
-    return yyyy, ddd, gps_week, gps_day, gps_tow
+    return {
+    "yyyy":     yyyy,
+    "ddd":      ddd,
+    "gps_week": gps_week,
+    "gps_day":  gps_day,
+    "gps_tow":  gps_tow,
+    }
 
-
+##################################################################################
 def vector_enu_to_ecef(lat: float, lon: float, dE: float, dN: float, dU: float) -> np.ndarray:
     """
     Converts a local correction vector from ENU (East-North-Up) to ECEF (Earth-Centered, Earth-Fixed).
