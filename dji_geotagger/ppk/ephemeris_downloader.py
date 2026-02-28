@@ -5,6 +5,7 @@ import requests
 import gzip
 import shutil
 import time
+import georinex as gr
 from dji_geotagger.tools.tools import utc_to_gps
 
 
@@ -13,38 +14,13 @@ def parse_obs_time_range(obs_file: Path) -> tuple[datetime, datetime]:
     """
     Parse RINEX observation file to extract TIME OF FIRST/LAST OBS as datetime objects.
     """
-    t_start, t_end = None, None
-
-    with open(obs_file, 'r') as f:
-        for line in f:
-            if "TIME OF FIRST OBS" in line or "TIME OF LAST OBS" in line:
-                parts = line.strip().split()
-                if len(parts) < 7:
-                    continue  # skip invalid lines
-                try:
-                    dt_parsed = datetime(
-                        year=int(parts[0]),
-                        month=int(parts[1]),
-                        day=int(parts[2]),
-                        hour=int(parts[3]),
-                        minute=int(parts[4]),
-                        second=int(float(parts[5]))
-                    )
-                except Exception as e:
-                    raise ValueError(f"[ERROR] Failed to parse time in line: {line}\n{e}")
-
-                if "TIME OF FIRST OBS" in line:
-                    t_start = dt_parsed
-                elif "TIME OF LAST OBS" in line:
-                    t_end = dt_parsed
-
-            if t_start and t_end:
-                break
-
-    if not t_start or not t_end:
-        raise ValueError("[ERROR] Could not find TIME OF FIRST/LAST OBS in obs file.")
-
+    times = gr.gettime(obs_file)
+    if len(times) < 2:
+        raise ValueError("[ERROR] Not enough epochs in obs file.")
+    t_start = times[0].astype("datetime64[ms]").astype(datetime)
+    t_end   = times[-1].astype("datetime64[ms]").astype(datetime)
     return t_start, t_end
+
 
 
 
@@ -142,15 +118,18 @@ def download_ephemeris(
     return dest_files
 
 
-def try_download_igs_data(
+def download_igs_data(
     base_obs_path: Path,
-    igs_dir: Path = Path("temp/ephemeris"),
+    igs_dir: Path,
     CODE_products: bool = True
 ) -> str:
     """
     Try to download highest quality IGS data available for the given days in obs file.
     Return level of data obtained: "Final", "Rapid", or "Broadcast".
     """
+
+    # input
+    igs_dir = Path.cwd() / "DGT_output" / "PPK_result"
 
     # Parse start and end time from obs
     utc_start, utc_end = parse_obs_time_range(base_obs_path)
