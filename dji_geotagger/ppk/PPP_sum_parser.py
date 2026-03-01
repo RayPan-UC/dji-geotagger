@@ -92,7 +92,7 @@ def sum_file_parser(
 
     # Covariance Matrix Calculation
     # sigma
-    sigma = np.array([sigma_X, sigma_Y, sigma_Z]) / 1.96 # 95% -> 1 sigma
+    PPP_sigma_ECEF = np.array([sigma_X, sigma_Y, sigma_Z]) / 1.96 # 95% -> 1 sigma
     # correlation (ECEF)
     corr = np.array([
                         [    1.0,  rho_XY,  rho_XZ],
@@ -100,17 +100,17 @@ def sum_file_parser(
                         [ rho_XZ,  rho_YZ,     1.0]
                     ])
     # Covariance Matrix (ECEF)
-    cov_PPP_ECEF = np.diag(sigma) @ corr @ np.diag(sigma)
-
+    cov_PPP_ECEF = np.diag(PPP_sigma_ECEF) @ corr @ np.diag(PPP_sigma_ECEF)
     # Covariance Matrix (ENU)
     cov_PPP_ENU = ECEF2ENU(cov_ecef=cov_PPP_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
-    sigma_ENU = np.sqrt(np.diag(cov_PPP_ENU))
+    PPP_sigma_ENU = np.sqrt(np.diag(cov_PPP_ENU))
 
     # Summary
     print(f"[INFO] Coord system : {coord_sys}")
     print(f"[INFO] Base ECEF    : ({est_X:.4f}, {est_Y:.4f}, {est_Z:.4f}) m")
     print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
-    print(f"[INFO] Base 1σ ENU  : E={sigma_ENU[0]*100:.2f} cm, N={sigma_ENU[1]*100:.2f} cm, U={sigma_ENU[2]*100:.2f} cm")
+    print(f"[INFO] Base 1σ ENU  : E={PPP_sigma_ENU[0]*100:.2f} cm, N={PPP_sigma_ENU[1]*100:.2f} cm, U={PPP_sigma_ENU[2]*100:.2f} cm")
+    print(f"[INFO] Base 1σ ECEF : X={PPP_sigma_ECEF[0]*100:.2f} cm, Y={PPP_sigma_ECEF[1]*100:.2f} cm, Z={PPP_sigma_ECEF[2]*100:.2f} cm")
 
     return {
         "coord_sys": coord_sys,
@@ -122,5 +122,6 @@ def sum_file_parser(
         "hgt": hgt,
         "cov_PPP_ECEF": cov_PPP_ECEF,
         "cov_PPP_ENU": cov_PPP_ENU,
-        "sigma_ENU": sigma_ENU,
+        "PPP_sigma_ECEF": PPP_sigma_ECEF,
+        "PPP_sigma_ENU": PPP_sigma_ENU,
     }

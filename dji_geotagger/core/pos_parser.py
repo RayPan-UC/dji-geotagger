@@ -131,6 +131,9 @@ def parse_pos(
             lat_dd, lon_dd, hgt = pm.ecef2geodetic(x, y, z) # Coordinates
             cov_total_ENU = ECEF2ENU(cov_total_ECEF, lon_deg=lon_dd, lat_deg=lat_dd) # Covariance
 
+            # sigma
+            sigma_total_ECEF = np.sqrt(np.diag(cov_total_ECEF)) # 1-sigma in ECEF (m)
+            sigma_total_ENU = np.sqrt(np.diag(cov_total_ENU)) # 1-sigma in ENU (m)
             # Save as dict in list
             records.append({
                     "GPS_week": gps_week,
@@ -143,6 +146,8 @@ def parse_pos(
                     "hgt": hgt,
                     "cov_total_ECEF": cov_total_ECEF,
                     "cov_total_ENU": cov_total_ENU,
+                    "sigma_total_ECEF": sigma_total_ECEF,
+                    "sigma_total_ENU": sigma_total_ENU
                 })
 
         except Exception as e:
