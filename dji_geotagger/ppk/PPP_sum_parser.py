@@ -4,7 +4,9 @@ import numpy as np
 from dji_geotagger.tools.tools import ECEF2ENU
 
 
-def sum_file_parser(sum_file_path: Path):
+def sum_file_parser(
+        base_obs: Path = None,
+        sum_file_path: str = None):
     """
     Parse CSRS-PPP .sum file to extract final estimated ECEF position and covariance matrix.
 
@@ -21,17 +23,29 @@ def sum_file_parser(sum_file_path: Path):
             X, Y, Z         : ECEF coordinates (m)
             lat_dd, lon_dd  : decimal degrees
             hgt             : ellipsoidal height (m)
-            cov_ECEF        : 3x3 covariance matrix in ECEF (m^2)
-            cov_ENU         : 3x3 covariance matrix in ENU (m^2)
+            cov_PPP_ECEF        : 3x3 covariance matrix in ECEF (m^2)
+            cov_PPP_ENU         : 3x3 covariance matrix in ENU (m^2)
             sigma_ENU       : 1-sigma [sE, sN, sU] (m)
             coord_sys       : coordinate system string (e.g. IGb20)
     """
 
+    # Check exist
+    if sum_file_path:
+        sum_file_path = Path(sum_file_path)
+    elif base_obs:
+        sum_file_path = Path.cwd() / "DGT_output" / "RINEX" / "base" / "PPP" / f"{base_obs.stem}.sum"    
+    else:
+        raise ValueError("[ERROR] Must provide either base_obs or sum_file_path")
+
+    if sum_file_path and not sum_file_path.exists():
+            raise FileNotFoundError(f"[ERROR] PPP summary file (.sum) not found: {sum_file_path}")
+    
     # Placeholders
     est_X = est_Y = est_Z = None
     sigma_X = sigma_Y = sigma_Z = None
     rho_XY = rho_XZ = rho_YZ = None
     lat_dd = lon_dd = hgt = None
+    coord_sys = None
 
     with open(sum_file_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -73,7 +87,7 @@ def sum_file_parser(sum_file_path: Path):
                 hgt = float(parts[5])
 
     # Check all parsed
-    if None in (est_X, est_Y, est_Z, sigma_X, sigma_Y, sigma_Z, rho_XY, rho_XZ, rho_YZ):
+    if None in (est_X, est_Y, est_Z, sigma_X, sigma_Y, sigma_Z, rho_XY, rho_XZ, rho_YZ, coord_sys):
         raise ValueError("[WARNING] Some POS entries missing or could not be parsed")
 
     # Covariance Matrix Calculation
@@ -96,16 +110,16 @@ def sum_file_parser(sum_file_path: Path):
     print(f"[INFO] Coord system : {coord_sys}")
     print(f"[INFO] Base ECEF    : ({est_X:.4f}, {est_Y:.4f}, {est_Z:.4f}) m")
     print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
-    print(f"[INFO] 1σ ENU       : E={sigma_ENU[0]*100:.2f} cm, N={sigma_ENU[1]*100:.2f} cm, U={sigma_ENU[2]*100:.2f} cm")
+    print(f"[INFO] Base 1σ ENU  : E={sigma_ENU[0]*100:.2f} cm, N={sigma_ENU[1]*100:.2f} cm, U={sigma_ENU[2]*100:.2f} cm")
 
     return {
+        "coord_sys": coord_sys,
         "X": est_X,
         "Y": est_Y,
         "Z": est_Z,
         "lat_dd": lat_dd,
         "lon_dd": lon_dd,
         "hgt": hgt,
-        "coord_sys": coord_sys,
         "cov_PPP_ECEF": cov_PPP_ECEF,
         "cov_PPP_ENU": cov_PPP_ENU,
         "sigma_ENU": sigma_ENU,

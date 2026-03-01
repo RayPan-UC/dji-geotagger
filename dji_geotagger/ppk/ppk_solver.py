@@ -16,39 +16,60 @@ def process_ppk(
     base_obs: str,
     base_nav: str,
     rover_dir: str,
-    base_PPP_sum: str = None,
+    sum_file_path: str = None,
     user_conf: dict = {},
     ephemeris_files: list[str] = None,
-
     output_dir: Path = None,
-
-
-    
     RTKLIB: Path = None
-) -> Path:
+    ) -> list[Path]:
     """
     Batch process RTKLIB PPK solution for a directory of rover OBS files.
 
-    This function performs post-processed kinematic (PPK) GNSS positioning using RTKLIB's `rnx2rtkp.exe`.
-    It automatically applies base station coordinates from a `.sum` file (if provided), generates a
-    temporary RTKLIB `.conf` file with optional user overrides, and processes each rover `.obs` file
-    to produce `.pos` outputs.
+    Performs post-processed kinematic (PPK) GNSS positioning using RTKLIB's
+    rnx2rtkp. Resolves base station coordinates from a PPP .sum file or
+    user-supplied config, builds a temporary RTKLIB .conf, and processes
+    each rover .obs file to produce a .pos output.
+
+    Base coordinate priority:
+        1. sum_file_path  : explicit path to CSRS-PPP .sum file
+        2. base_obs stem  : auto-locate .sum under DGT_output/RINEX/base/PPP/
+        3. user_conf      : manual ant2-pos1/2/3 entries
+
+    Ephemeris priority:
+        1. ephemeris_files : user-supplied .sp3/.clk files
+        2. auto-download   : IGS FINAL products via download_igs_data()
+
+    Already-existing .pos files are skipped but still included in the
+    returned list, so downstream pos_df_merger() receives all results.
 
     Parameters:
-        base_obs (Path): Path to base station .obs file.
-        base_nav (Path): Path to base station .nav file.
-        rover_dir (Path): Directory containing rover .obs files.
-        override_base_from_sum_file (Path, optional): Path to `.sum` file from CSRS-PPP or equivalent,
-            used to extract base station ECEF coordinates (X, Y, Z).
-        ephemeris_files (list[Path], optional): List of precise ephemeris and clock files (.sp3/.clk).
-            If None, the function will attempt to download FINAL IGS products automatically.
-        output_dir (Path, optional): Directory to store output .pos files. Defaults to 'temp/ppk_result'.
-        conf_override (dict, optional): Dictionary of RTKLIB configuration options to override the default.
-            Common keys include "pos1-posmode", "ant2-pos1", etc.
-        rnx2rtkp (Path, optional): Path to RTKLIB rnx2rtkp executable. Default assumes standard install.
+    base_obs : str or Path
+        Path to base station RINEX observation file.
+    base_nav : str or Path
+        Path to base station RINEX navigation file.
+    rover_dir : str or Path
+        Directory containing rover RINEX observation files (*.obs).
+    sum_file_path : str or Path, optional
+        Path to CSRS-PPP .sum file for base station ECEF coordinates.
+        If None, attempts to auto-locate from base_obs stem.
+    user_conf : dict, optional
+        RTKLIB config key-value overrides (e.g. {"pos1-posmode": "kinematic"}).
+        Base coordinates from .sum file always take priority over
+        ant2-pos1/2/3 entries here.
+    ephemeris_files : list of str or Path, optional
+        Precise ephemeris (.sp3) and clock (.clk) files.
+        If None, IGS FINAL products are downloaded automatically.
+    output_dir : Path, optional
+        Directory for .pos output files.
+        Defaults to <cwd>/DGT_output/PPK_result.
+    RTKLIB : Path, optional
+        Path to RTKLIB installation directory containing rnx2rtkp.
+        If None, searches system PATH.
 
     Returns:
-        Path: Path to the output directory containing all generated .pos files.
+    list of Path
+        Paths to all .pos output files (both newly solved and pre-existing).
+        Failed epochs are excluded.
     """
     
 
@@ -56,14 +77,13 @@ def process_ppk(
     base_obs = Path(base_obs)
     base_nav = Path(base_nav)
     rover_dir = Path(rover_dir)
-    base_PPP_sum = Path(base_PPP_sum) if base_PPP_sum else Path.cwd() / "DGT_output" / "RINEX" / "base" / "PPP" / f"{base_obs.stem}.sum"
+    rover_obs_files = sorted(rover_dir.glob("*.obs"))
     ephemeris_files = [Path(p) for p in ephemeris_files] if ephemeris_files else None
     output_dir = Path(output_dir) if output_dir else Path.cwd() / "DGT_output" / "PPK_result"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-
     # Check files exist
-    for file in [base_obs, base_nav, base_PPP_sum]:
+    for file in [base_obs, base_nav]:
         if file and not file.exists():
             raise FileNotFoundError(f"[ERROR] File not found: {file}")
 
@@ -71,56 +91,32 @@ def process_ppk(
         for file in ephemeris_files:
             if not file.exists():
                 raise FileNotFoundError(f"[ERROR] Ephemeris file not found: {file}")
+    
+    if len(rover_obs_files) == 0:
+        raise FileNotFoundError(f"[ERROR] Rover .obs file not found")
 
     # Check rnx2rtkp
     rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB)
-            
 
     # Handle base station configuration
-    # 1. If PPP .sum file provided
-    if base_PPP_sum:
-        # Priority: Use PPP .sum file for base coordinates
-        PPP_result = sum_file_parser(base_PPP_sum)
-        base_conf = {
-            "ant2-postype": "xyz",
-            "ant2-pos1": PPP_result.get("X"),
-            "ant2-pos2": PPP_result.get("Y"),
-            "ant2-pos3": PPP_result.get("Z")
-        }
-    
-        # If user config provided
-        user_conf.update(base_conf)
-        conf_file = override_rtklib_config(user_conf)
-
-    
-
-    else:
-        if not user_conf:
-            raise ValueError(no_base_pos_warn())
-        print("[INFO] Using manual base coordinates from conf_override.")
-        conf_file = override_rtklib_config(user_conf)
-
-
-    
+    base_conf = resolve_base_position(base_obs, sum_file_path, user_conf)
+    user_conf.update(base_conf)
+    conf_file = override_rtklib_config(user_conf)
 
     # Download ephemeris data (.clk and .sp3)
     if not ephemeris_files:
-        ephemeris_files = download_igs_data(base_obs_path=base_obs)
+        ephemeris_files = download_igs_data(base_obs_path=base_obs)   
     
-    # Print rover file count
-    obs_files = sorted(rover_dir.glob("*.obs"))
-    print(f"\n======= {len(obs_files)} .obs files were found. Start PPK calculation now... =======")
-
 
     # start ppk
-    for rover_obs in obs_files:
+    print(f"\n======= {len(rover_obs_files)} .obs files were found. Start PPK calculation now... =======")
+    ppk_results = []
+    for rover_obs in rover_obs_files:
         output_pos = output_dir / f"{rover_obs.stem}.pos"
-
         if output_pos.exists():
             print(f"[WARNING] Output exists, skipping: {output_pos.name}")
+            ppk_results.append(output_pos) # skip and add result to list
             continue
-
-        
         cmd = [
             str(rnx2rtkp),
             "-k", str(conf_file),
@@ -131,11 +127,10 @@ def process_ppk(
             *[str(f) for f in ephemeris_files],
         ]
 
-        print(f"[INFO] Solving: {rover_obs.name} ...")
-        
-        
         try:
+            print(f"[INFO] Solving: {rover_obs.name} ...")
             subprocess.run(cmd, check=True)
+            ppk_results.append(output_pos)
             print(f"[INFO] Finished: {output_pos.name}")
         
         except subprocess.CalledProcessError:
@@ -147,7 +142,46 @@ def process_ppk(
         "(e.g., IGS FINAL products are referenced to IGS20, "
         "which is consistent with ITRF2020 at the mm level.)")
 
-    return output_dir
+    return ppk_results
+
+
+def resolve_base_position(
+    base_obs: Path = None,
+    sum_file_path: str = None,
+    user_conf: dict = {}
+    ) -> dict:
+    """
+    Resolve base station ECEF coordinates from one of three sources:
+    1. User-specified .sum file path
+    2. Auto-detected .sum file from base_obs filename
+    3. Manual coordinates in user_conf (ant2-pos1/2/3)
+
+    Returns:
+    base_conf : dict
+        RTKLIB config entries for base position
+    """
+
+    required = {"ant2-pos1", "ant2-pos2", "ant2-pos3"} # for Priority 3
+    # Priority 1 & 2: .sum file
+    if sum_file_path or base_obs:
+        PPP_result = sum_file_parser(base_obs=base_obs, sum_file_path=sum_file_path)
+        X, Y, Z = PPP_result["X"], PPP_result["Y"], PPP_result["Z"]
+    # Priority 3: manual user_conf
+    elif required.issubset(user_conf):
+        print("[INFO] Using manual base coordinates from user_conf.")
+        X, Y, Z = user_conf["ant2-pos1"], user_conf["ant2-pos2"], user_conf["ant2-pos3"]    
+    # No input
+    else:
+        raise ValueError("[ERROR] Base position not provided. Supply sum_file_path, base_obs, or ant2-pos1/2/3 in user_conf.")
+    
+    return  {
+                "ant2-postype": "xyz",
+                "ant2-pos1": X,
+                "ant2-pos2": Y,
+                "ant2-pos3": Z,
+            }
+
+
 
 def no_base_pos_warn():
     return("""

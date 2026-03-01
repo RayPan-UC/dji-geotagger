@@ -15,7 +15,8 @@ dependencies = [
   "tqdm",
   "requests",
   "georinex",
-  "astropy"
+  "astropy",
+  "pymap3d"
 ]
 
 classifiers = [
