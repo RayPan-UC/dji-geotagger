@@ -4,18 +4,55 @@ from pathlib import Path
 from dji_geotagger.tools.tools import NED2ECEF_vec
 
 
-def mrk2df(mrk_file: str) -> pd.DataFrame:
+def mrk2df(mrk_file: str | Path) -> pd.DataFrame:
     """
-    Parse a DJI .MRK file into a cleaned, geodetically consistent DataFrame.
+    Parse a DJI *.MRK file into a cleaned, geodetically usable DataFrame.
 
-    The .MRK file stores GNSS position and antenna-to-camera lever-arm offsets
-    recorded at each exposure epoch. This function performs:
+    The DJI MRK file stores, per exposure epoch:
+    - an exposure sequence index (`seq`)
+    - GNSS time (GPS week + time-of-week)
+    - a lever-arm offset from antenna phase center to camera CMOS center (in local NED, millimetres)
+    - camera geodetic position (lat/lon/ellh; often with DJI suffix tags)
+    - RTK quality flag
 
-        1) Reading raw tab-separated MRK records
-        2) Cleaning string fields (removing suffix tags such as ",Lat", ",Lon")
-        3) Unit conversion (lever-arm offsets: millimetres → metres)
-        4) Converting lever-arm vectors from local NED to global ECEF
-        5) Mapping RTK quality flags to human-readable solution status
+    This function performs:
+      1) Read raw tab-separated MRK records (no header).
+      2) Clean string fields by taking the token before the first comma
+         (e.g., "55.123,Lat" -> "55.123") and stripping bracket tags for GPS_week.
+      3) Convert lever-arm offsets from millimetres to metres.
+      4) Convert lever-arm vectors from local NED (N,E,D; D is positive Down) to ECEF (dX,dY,dZ)
+         using per-epoch latitude/longitude.
+      5) Map RTK flag codes into a human-readable solution status.
+
+    Parameters
+    ----------
+    mrk_file : str | Path
+        Path to a DJI MRK file. The file is expected to be tab-separated and follow DJI's standard layout.
+
+    Returns
+    -------
+    pd.DataFrame
+        Cleaned MRK table with at least the following columns:
+        - seq (int)
+        - GPS_time (float; GPS time-of-week seconds)
+        - GPS_week (int)
+        - lat, lon (float; degrees)
+        - ellh (float; metres)
+        - gimbal_dN, gimbal_dE, gimbal_dD (float; metres; local NED, D is Down)
+        - gimbal_dX, gimbal_dY, gimbal_dZ (float; metres; ECEF lever-arm)
+        - rtk_status (str; Single / Float / Fixed / Unknown)
+        - stddev (raw field from MRK; currently preserved as-is and not decomposed into N/E/D components)
+
+    Notes
+    -----
+    - DJI lever-arm is expressed in local NED with D = Down (positive downward).
+    - ECEF lever-arm conversion is performed per record using that record's lat/lon.
+    - RTK flag mapping:
+        0 or 16 -> Single
+        34      -> Float
+        50      -> Fixed
+        otherwise -> Unknown
+    - Any parsing failure raises RuntimeError with the original exception message.
 
     -------------------------------------------------------------------------
     Raw .MRK Columns (DJI Standard Layout)
@@ -33,6 +70,9 @@ def mrk2df(mrk_file: str) -> pd.DataFrame:
     11  StdDev E            : East position standard deviation (m)
     12  StdDev D            : Down position standard deviation (m)
     13  RTK Flag            : RTK solution quality indicator
+
+    Note: DJI MRK "StdDev" fields can vary by firmware/model. This function currently
+    preserves the raw `stddev` field as-is and does not decompose N/E/D stddev terms.
 
     -------------------------------------------------------------------------
     Coordinate Frame Definition
@@ -61,35 +101,11 @@ def mrk2df(mrk_file: str) -> pd.DataFrame:
         34        → Float
         50        → Fixed
         otherwise → Unknown
-
-    -------------------------------------------------------------------------
-    Output DataFrame Columns
-    -------------------------------------------------------------------------
-    seq              : image sequence index
-    GPS_time         : GPS time-of-week (seconds)
-    GPS_week         : GPS week number (int)
-    lat, lon         : geodetic coordinates (degrees)
-    ellh             : ellipsoidal height (metres)
-    gimbal_dN/E/D    : lever-arm offsets in local NED frame (metres)
-    gimbal_dX/Y/Z    : lever-arm offsets in ECEF frame (metres)
-    rtk_status       : RTK solution type (Single / Float / Fixed / Unknown)
-
-    Notes
-    -----
-    - NED uses positive Down (not Up).
-    - ECEF conversion is performed per epoch.
-    - The function assumes WGS84-compatible geodetic coordinates.
-    - Any parsing failure raises RuntimeError.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Cleaned MRK data ready for PPK interpolation and
-        camera center correction workflows.
     """
     # Input
     mrk_file = Path(mrk_file)
-
+    if not mrk_file.exists():
+        raise FileNotFoundError(f"[ERROR] MRK file not found: {mrk_file}")
     # Parse file
     df = pd.read_csv(mrk_file, sep='\t', header=None)
 
@@ -103,15 +119,18 @@ def mrk2df(mrk_file: str) -> pd.DataFrame:
         df['lat']       = df['lat'].str.strip().str.split(',').str[0].astype(float)
         df['lon']       = df['lon'].str.strip().str.split(',').str[0].astype(float)
         df['ellh']      = df['ellh'].str.strip().str.split(',').str[0].astype(float)
-        df['gimbal_dN'] = df['gimbal_dN'].str.strip().str.split(',').str[0].astype(int) * 0.001  # mm → m
-        df['gimbal_dE'] = df['gimbal_dE'].str.strip().str.split(',').str[0].astype(int) * 0.001  # mm → m
-        df['gimbal_dD'] = df['gimbal_dD'].str.strip().str.split(',').str[0].astype(int) * 0.001  # mm → m
+        df['gimbal_dN'] = df['gimbal_dN'].str.strip().str.split(',').str[0].astype(float) * 0.001  # mm → m
+        df['gimbal_dE'] = df['gimbal_dE'].str.strip().str.split(',').str[0].astype(float) * 0.001  # mm → m
+        df['gimbal_dD'] = df['gimbal_dD'].str.strip().str.split(',').str[0].astype(float) * 0.001  # mm → m
         df['rtk_flag']  = df['rtk_flag'].str.strip().str.split(',').str[0].astype(int)
 
         # level arm -> ECEF
         ecef_vecs = np.array([
-            NED2ECEF_vec(row.gimbal_dN, row.gimbal_dE, row.gimbal_dD, row.lat, row.lon)
-            for _, row in df.iterrows()
+            NED2ECEF_vec(n, e, d, lat, lon)
+            for n, e, d, lat, lon in zip(
+                df['gimbal_dN'], df['gimbal_dE'], df['gimbal_dD'],
+                df['lat'], df['lon']
+            )
         ])
 
         df['gimbal_dX'] = ecef_vecs[:, 0]
@@ -127,5 +146,5 @@ def mrk2df(mrk_file: str) -> pd.DataFrame:
     except Exception as e:
         raise RuntimeError(f"[ERROR] Failed to parse .MRK file: {mrk_file}. {e}")
     
-    print(f"[INFO] Parsed {mrk_file.stem}.mrk ({len(df)} records)")
+    print(f"[INFO] Parsed {mrk_file.name} ({len(df)} records)")
     return df

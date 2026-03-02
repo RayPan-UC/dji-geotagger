@@ -6,131 +6,435 @@ This Python library enables centimetre-level camera geotagging by combining PPK 
 
 ## Features
 
-- Batch process `.obs` raw GNSS logs into RINEX and perform PPK with RTKLIB
-- Download precise ephemeris data (SP3/CLK) automatically
-- Parse DJI `.MRK` and interpolate correction vectors to camera center (ECEF)
-- Match images by GPS time, apply PPK + MRK correction with covariance propagation
-- Export geotagged results in ECEF/ENU/UTM with estimated 3D precision
+- Convert raw GNSS logs (`.bin`, `.dat`) to RINEX format using RTKLIB `convbin`
+- Download precise ephemeris data (SP3/CLK) automatically from IGS
+- Perform precise point positioning (PPK) with optional base station refinement from CSRS-PPP `.sum` files
+- Parse DJI `.MRK` gimbal offset files and interpolate corrections to camera center (ECEF)
+- Match images by GPS time, apply PPK + MRK corrections with full covariance propagation
+- Export geotagged results in ECEF/ENU/UTM with estimated 3D precision (1-sigma)
 - Support for DJI P1, M300, and other RTK-enabled drones
+- Batch processing of multiple flight folders
 
 ## Installation
 
 ```bash
-git clone https://github.com/RayPan-UC/dji-geotagger.git
 pip install dji-geotagger
+```
+
+Or from source:
+```bash
+git clone https://github.com/RayPan-UC/dji-geotagger.git
+cd dji-geotagger
+pip install -e .
 ```
 
 ## Dependencies
 
 - Python ≥ 3.9
-- `pillow`, `defusedxml`, `pandas`, `numpy`, `pyproj`, `tqdm`
-- RTKLIB (`convbin.exe`, `rnx2rtkp.exe`)
+- `pillow` - Image processing and EXIF reading
+- `pandas` - Data manipulation and CSV export
+- `numpy` - Numerical computations
+- `tqdm` - Progress bars
+- `requests` - HTTP requests for ephemeris download
+- `georinex` - RINEX file parsing
+- `astropy` - Time and coordinate utilities
+- `pymap3d` - Geodetic coordinate conversions
+- `scipy` - Scientific computing (interpolation, linear algebra)
+- RTKLIB (`convbin`, `rnx2rtkp`) - Auto-downloaded on first use
 
 ## Workflow Overview
 
-1. **Convert raw GNSS to RINEX** Uses RTKLIB `convbin` for both base and rover logs.
-2. **Download precise IGS ephemeris** Automatically fetch `.sp3` and `.clk` based on RINEX timestamps.
-3. **Run PPK** Batch PPK processing using `rnx2rtkp` with optional override base coordinates from PPP `.sum` file.
-4. **Parse image EXIF/XMP metadata** Extracts capture time, attitude, and gimbal orientation.
-5. **Parse MRK files** Converts NED to ENU, then ENU to ECEF correction vectors.
-6. **Interpolate camera centre** Matches MRK by time, interpolates PPK positions, applies gimbal offset.
-7. **Export results** Generates a DataFrame (or CSV) of corrected positions and attitude per image.
+1. **Convert raw GNSS to RINEX** - Convert base station (`.dat`) and rover (`.bin`) logs to standard RINEX format
+2. **Optional: Download precise ephemeris** - Automatic IGS SP3/CLK download based on observation dates
+3. **Optional: Resolve base station position** - Use CSRS-PPP `.sum` file or manual ECEF coordinates
+4. **Run PPK batch processing** - Execute `rnx2rtkp` for each flight folder
+5. **Parse image metadata** - Extract capture time, gimbal attitude, and camera orientation from EXIF/XMP
+6. **Parse and interpolate MRK** - Convert gimbal offset vectors from NED → ENU → ECEF
+7. **Compute geotagged positions** - Match images to PPK solutions, apply MRK offset, propagate covariance
+8. **Transform coordinates** - Convert from ECEF to UTM or other target CRS
+9. **Export CSV** - Generate timestamped CSV with positions, attitudes, and uncertainties
 
 ## Example Usage
 
+### Basic Workflow
+
 ```python
-from pathlib import Path
-from pyproj import CRS
-from dji_geotagger import *
+import dji_geotagger as dgt
 
-# === User-defined project path ===
-project_root = Path(r"/path/to/your/project/SynopticSite1")
-
-# === Clean temporary directories ===
-clean_temp_dirs()
-
-# === Convert base and rover raw logs to RINEX ===
-rover_dir = raw_to_rinex_batch(
-    keywords=['20250513', 'PPKRAW', '.bin'],
-    input_dir=project_root,
-    type="rover"
+# === 1. Convert GNSS raw data to RINEX ===
+base_obs, base_nav = dgt.raw2rinex(
+    input_path=r"path/to/base/DRTK3_20250730.dat",
+    antenna_height_in_meter=2.0
 )
 
-base_obs, base_nav = raw_to_rinex_batch(
-    keywords=['20250513', '0006', 'DRTK', '.dat'],
-    input_dir=project_root,
-    type="base",
-)
+# === 2. (Optional) Use PPP base position from CSRS-PPP ===
+ppp_sum_file = r"path/to/DRTK3_20250730.sum"  # or leave as None for manual base position
 
-# === Pause here to process base .sum file if available ===
+# === 3. Define flight folders to process ===
+flight_folders = [
+    r"P1/DJI_202507301227_011_LOCATION",
+    r"P1/DJI_202507301227_012_LOCATION",
+    r"P1/DJI_202507301256_013_LOCATION"
+]
 
-ppp_sum_file = pause_for_PPP_sum_file()
-
-
-# === Post-process PPK with base .sum file ===
-process_ppk(
+# === 4. Process all flights at once ===
+geotag_df = dgt.geotag(
+    flight_folders=flight_folders,
     base_obs=base_obs,
     base_nav=base_nav,
-    rover_dir=rover_dir,
-    override_base_from_sum_file=ppp_sum_file,
-    output_dir=Path("temp/ppk_result"),
+    sum_file_path=ppp_sum_file,  # Optional CSRS-PPP base position
+    output_dir="output/geotags"
 )
 
-# === Compute corrected camera positions ===
-final_df = load_and_compute_camera_positions(
-    mrk_dir=project_root,
-    img_dir=project_root,
-    pos_dir=Path("temp/ppk_result"),
-    base_sum_file=ppp_sum_file
-)
+# === 5. Save to CSV ===
+geotag_df.to_csv("geotagged_results.csv", index=False)
+print(f"Geotagged {len(geotag_df)} images")
+```
 
-# === Transform to target coordinate system (e.g., WGS84/UTM) ===
-target_crs = 32612
-final_df = transform_coordinates(
-    final_df,
-    target_crs=CRS.from_user_input(target_crs),
-    out_x="Easting",
-    out_y="Northing",
-    out_z="Height_Ellp",
-    cov_ecef2enu=True,
-    drop_original=True
-)
+### Advanced: Manual Base Station Position
 
-# === Save result as CSV ===
-save_csv(final_df)
+If you don't have a CSRS-PPP `.sum` file, provide base station coordinates manually:
+
+```python
+import dji_geotagger as dgt
+
+user_config = {
+    'ant2-postype': 'xyz',
+    'ant2-pos1': -2418456.789,  # X (metres), ECEF
+    'ant2-pos2':  5385936.123,  # Y (metres), ECEF
+    'ant2-pos3':  2405716.456,  # Z (metres), ECEF
+}
+
+geotag_df = dgt.geotag(
+    flight_folders=flight_folders,
+    base_obs=base_obs,
+    base_nav=base_nav,
+    user_conf=user_config  # Use manual base position instead of sum_file_path
+)
+```
+
+### Step-by-Step: Manual Control Over Each Flight
+
+For detailed control and debugging of the geotagging pipeline for each flight:
+
+```python
+import dji_geotagger as dgt
+from pathlib import Path
+
+# === Setup ===
+base_obs, base_nav = dgt.raw2rinex(
+    r"DRTK3/DRTK3_0038_20250730102537.dat", 
+    antenna_height_in_meter=2.0
+)
+ppp_sum_file = r"DRTK3/PPP/DRTK3_0038_20250730102537.sum"
+
+flight_folders = [
+    r"P1/DJI_202507301227_011_SynopticSite3",
+    r"P1/DJI_202507301227_012_SynopticSite3",
+]
+
+# === Process each flight manually ===
+all_results = []
+
+for flight_dir in flight_folders:
+    flight_dir = Path(flight_dir)
+    print(f"\n=== Processing {flight_dir.stem} ===")
+    
+    # Step 1: Find and convert rover GNSS raw → RINEX
+    rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
+    if not rover_raws:
+        print(f"No *_PPKRAW.bin found in {flight_dir}, skipping...")
+        continue
+    
+    rover_raw = rover_raws[0]
+    print(f"Converting {rover_raw.name}...")
+    rover_obs, rover_nav = dgt.raw2rinex(rover_raw)
+    
+    # Step 2: Run PPK solver
+    print(f"Running PPK for {flight_dir.stem}...")
+    pos_df = dgt.process_ppk(
+        base_obs=base_obs,
+        base_nav=base_nav,
+        rover_obs=rover_obs,
+        sum_file_path=ppp_sum_file
+    )
+    print(f"✓ PPK solution: {len(pos_df)} poses")
+    
+    # Step 3: Parse MRK gimbal offsets
+    mrks = list(flight_dir.glob("*.MRK"))
+    if not mrks:
+        print(f"No *.MRK found in {flight_dir}, skipping...")
+        continue
+    
+    mrk = mrks[0]
+    print(f"Parsing {mrk.name}...")
+    mrk_df = dgt.mrk2df(mrk)
+    print(f"✓ MRK data: {len(mrk_df)} exposure records")
+    
+    # Step 4: Parse image metadata (XMP/EXIF)
+    print(f"Parsing image metadata from {flight_dir.name}...")
+    img_df = dgt.parse_img_dir(flight_dir)
+    print(f"✓ Images found: {len(img_df)}")
+    
+    # Step 5: Compute camera center positions
+    print(f"Computing geotagged camera positions...")
+    result = dgt.compute_camera_position(
+        pos_df=pos_df,
+        mrk_df=mrk_df,
+        img_df=img_df,
+        full_output=False  # Set to True for all intermediate columns
+    )
+    result["flight"] = flight_dir.stem
+    print(f"✓ Geotagged {len(result)} images")
+    
+    all_results.append(result)
+
+# === Combine all flights ===
+if all_results:
+    geotag_df = dgt.pd.concat(all_results, ignore_index=True)
+    print(f"\n{'='*50}")
+    print(f"Total geotagged images: {len(geotag_df)}")
+    print(f"Flights processed: {geotag_df['flight'].nunique()}")
+    
+    # === Transform to UTM ===
+    print(f"\nTransforming to UTM Zone 12N...")
+    geotag_df = dgt.transform_coordinates(
+        geotag_df,
+        target_crs=32612,
+        cov_ecef2enu=True,
+        drop_original=False
+    )
+    
+    # === Export ===
+    geotag_df.to_csv("SynopticSite3_manual.csv", index=False)
+    print(f"✓ Results saved to SynopticSite3_manual.csv")
+else:
+    print("No flights were successfully processed.")
+```
+
+### Debugging: Inspect Intermediate Results
+
+```python
+import dji_geotagger as dgt
+import pandas as pd
+
+# After running PPK
+print("PPK Solution Statistics:")
+print(f"  X range: {pos_df['x'].min():.2f} to {pos_df['x'].max():.2f} m")
+print(f"  Y range: {pos_df['y'].min():.2f} to {pos_df['y'].max():.2f} m")
+print(f"  Z range: {pos_df['z'].min():.2f} to {pos_df['z'].max():.2f} m")
+print(f"  Std Dev X: {pos_df['sx'].mean():.4f} m")
+print(f"  Std Dev Y: {pos_df['sy'].mean():.4f} m")
+print(f"  Std Dev Z: {pos_df['sz'].mean():.4f} m")
+
+# Inspect MRK data
+print("\nMRK Gimbal Offsets (first 5 records):")
+print(mrk_df[['gps_week', 'gps_tow', 'offset_x', 'offset_y', 'offset_z']].head())
+
+# Inspect image metadata
+print("\nImage Metadata (first 5 images):")
+print(img_df[['file_name', 'gps_tow', 'roll', 'pitch', 'yaw']].head())
+
+# Inspect final geotagged results
+print("\nGeotagged Results (first 5 images):")
+print(result[['file_name', 'x_ecef', 'y_ecef', 'z_ecef', 'sd_x_ecef', 'sd_y_ecef', 'sd_z_ecef']].head())
 ```
 
 ## Output Format
 
-The output CSV contains the following columns:
+The output CSV contains the following columns (aligned with your actual flight data):
 
-| Column Name             | Description                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------------- |
-| `file_name`           | Image file name                                                                        |
-| `gps_week`            | GPS week number                                                                        |
-| `gps_time`            | Seconds into the GPS week                                                              |
-| `sd_x_ecef`           | Standard deviation in ECEF X (metres)                                                  |
-| `sd_y_ecef`           | Standard deviation in ECEF Y (metres)                                                  |
-| `sd_z_ecef`           | Standard deviation in ECEF Z (metres)                                                  |
-| `cov_ecef_flat`       | Flattened 3×3 ECEF covariance matrix (row-major, space-separated)                     |
-| `flight_roll`         | Aircraft body roll (degrees)                                                           |
-| `flight_pitch`        | Aircraft body pitch (degrees)                                                          |
-| `flight_yaw`          | Aircraft body yaw (degrees)                                                            |
-| `gimbal_roll`         | Gimbal-reported roll (degrees)                                                         |
-| `gimbal_pitch`        | Gimbal-reported pitch (degrees)                                                        |
-| `gimbal_yaw`          | Gimbal-reported yaw (degrees)                                                          |
-| `dji_geotagger_roll`  | Corrected camera roll for photogrammetry (degrees), with gimbal lock handling          |
-| `dji_geotagger_pitch` | Corrected camera pitch for photogrammetry (degrees), computed as `gimbal_pitch + 90` |
-| `dji_geotagger_yaw`   | Camera yaw for photogrammetry (degrees), taken directly from `flight_yaw`            |
-| `Easting`             | Easting in WGS84 / UTM Zone 12N (metres)                                               |
-| `Northing`            | Northing in WGS84 / UTM Zone 12N (metres)                                              |
-| `Height_Ellp`         | Height in WGS84 ellipsoidal coordinates (metres)                                       |
-| `sd_E`                | Standard deviation in Easting (ENU, metres)                                            |
-| `sd_N`                | Standard deviation in Northing (ENU, metres)                                           |
-| `sd_U`                | Standard deviation in Up (ENU, metres)                                                 |
-| `cov_enu_flat`        | Flattened 3×3 ENU covariance matrix (row-major, space-separated)                      |
+### Sequence & Time Information
+| Column | Description |
+|--------|-------------|
+| `seq` | Sequence number of the image |
+| `GPS_time` | GPS time-of-week (seconds) |
+| `GPS_week` | GPS week number |
+| `UTCAtExposure` | UTC datetime of exposure |
+| `FileName` | Image filename |
 
-Note: The projected coordinates (`Easting`, `Northing`, `Height`) are output in WGS84 / UTM Zone 12N by default. Users can customize the coordinate reference system (CRS) and output column formats according to their project requirements.
+### ECEF Coordinates (IGb20)
+| Column | Description |
+|--------|-------------|
+| `cam_X` | Camera center ECEF X (metres) |
+| `cam_Y` | Camera center ECEF Y (metres) |
+| `cam_Z` | Camera center ECEF Z (metres) |
+| `cov_total_ECEF` | Full 3×3 ECEF covariance matrix (m²) |
+| `sigma_total_ECEF` | Diagonal covariances [σX, σY, σZ] (metres) |
+| `coord_sys` | Reference frame (IGb20) |
+
+### Geodetic Coordinates (Lat/Lon/Height)
+| Column | Description |
+|--------|-------------|
+| `cam_lat` | Camera latitude (decimal degrees) |
+| `cam_lon` | Camera longitude (decimal degrees) |
+| `cam_h` | Camera altitude WGS84 ellipsoid (metres) |
+
+### Positional Uncertainties (1-sigma)
+| Column | Description |
+|--------|-------------|
+| `sigma_E` | Uncertainty in East direction (metres) |
+| `sigma_N` | Uncertainty in North direction (metres) |
+| `sigma_U` | Uncertainty in Up direction (metres) |
+
+### RTK Solution Quality
+| Column | Description |
+|--------|-------------|
+| `rtk_status` | RTK solution status ("Fixed", "Float", etc.) |
+| `stddev` | Position standard deviation (metres) |
+
+### Gimbal/DJI Offsets (NED frame)
+| Column | Description |
+|--------|-------------|
+| `gimbal_dN` | Gimbal offset North (metres) |
+| `gimbal_dE` | Gimbal offset East (metres) |
+| `gimbal_dD` | Gimbal offset Down (metres) |
+| `gimbal_dX` | Gimbal offset ECEF X (metres) |
+| `gimbal_dY` | Gimbal offset ECEF Y (metres) |
+| `gimbal_dZ` | Gimbal offset ECEF Z (metres) |
+
+### Aircraft Attitude (Body Frame)
+| Column | Description |
+|--------|-------------|
+| `FlightYawDegree` | Aircraft body yaw (degrees from North) |
+| `FlightPitchDegree` | Aircraft body pitch (degrees) |
+| `FlightRollDegree` | Aircraft body roll (degrees) |
+
+### Gimbal Attitude (Stabilized)
+| Column | Description |
+|--------|-------------|
+| `GimbalYawDegree` | Gimbal-reported yaw (degrees) |
+| `GimbalPitchDegree` | Gimbal-reported pitch (degrees, -90=nadir) |
+| `GimbalRollDegree` | Gimbal-reported roll (degrees) |
+
+### Camera Attitude (Photogrammetry Angles)
+| Column | Description |
+|--------|-------------|
+| `DGT_YawDegree` | Camera yaw (degrees) |
+| `DGT_PitchDegree` | Camera pitch (degrees) |
+| `DGT_RollDegree` | Camera roll (degrees) |
+
+### Image Metadata (from EXIF/XMP)
+| Column | Description |
+|--------|-------------|
+| `GpsLatitude` | Image EXIF GPS latitude (decimal degrees) |
+| `GpsLongitude` | Image EXIF GPS longitude (decimal degrees) |
+| `AbsoluteAltitude` | Image EXIF absolute altitude (metres) |
+
+### Full ECEF Covariance (Alternative Storage)
+| Column | Description |
+|--------|-------------|
+| `X`, `Y`, `Z` | Alternative ECEF coordinates (metres) |
+| `cov_ecef_flat` | Flattened 3×3 covariance as nested array |
+
+### Flight Grouping
+| Column | Description |
+|--------|-------------|
+| `flight` | Flight folder name (Path.stem) for filtering |
+
+---
+
+### Example Interpretation
+
+For a single row in the output CSV:
+```
+seq=1, GPS_time=325923.89, GPS_week=2377, FileName=DJI_20250730123142_0001.JPG
+cam_X=-1516923.93, cam_Y=-3308803.73, cam_Z=5220764.04 (ECEF coords)
+cam_lat=55.2959°, cam_lon=-114.6291°, cam_h=678.89 m (geodetic)
+sigma_E=0.0076 m, sigma_N=0.0112 m, sigma_U=0.0290 m (uncertainties)
+DGT_YawDegree=91.2°, DGT_PitchDegree=0.1°, DGT_RollDegree=0.0° (camera angles)
+```
+
+The **camera center position** (`cam_X/Y/Z`, `cam_lat/lon/h`) is the final geotagged location after:
+1. Interpolating PPK solution to exposure time
+2. Applying gimbal offset correction (NED → ECEF)
+3. Propagating full covariance through transformations
+
+## Key Functions
+
+### Core Geotagging
+- **`geotag(flight_folders, base_obs, base_nav, ...)`** - Batch process multiple flight folders (recommended)
+- **`load_and_compute_camera_positions(...)`** - Compute geotagged positions for a single batch of images
+
+### Raw Data Processing
+- **`raw2rinex(input_path, ...)`** - Convert `.bin`/`.dat` to RINEX observation (.obs) and navigation (.nav) files
+- **`process_ppk(base_obs, base_nav, rover_obs, ...)`** - Run precise point positioning with RTKLIB
+
+### Ephemeris & Configuration
+- **`download_igs_data(...)`** - Download IGS precise orbits and clocks (SP3/CLK)
+- **`pause_for_PPP_sum_file()`** - Interactive prompt for CSRS-PPP `.sum` file
+- **`override_rtklib_config(user_conf, ...)`** - Merge and export RTKLIB configuration
+
+### Coordinate Transformation
+- **`transform_coordinates(df, target_crs, ...)`** - Convert ECEF → projected CRS (e.g., UTM)
+- **`save_csv(df)`** - Export results to timestamped CSV file
+
+## Configuration
+
+### RTKLIB Settings
+Default PPK configuration is in `dji_geotagger/config/default_ppk_dict.py`. Override using:
+
+```python
+user_config = {
+    'pos1-posmode': 'kinematic',
+    'pos1-frequency': '1',
+    'pos1-soltype': 'forward',
+    # ... any other RTKLIB parameters
+}
+
+dgt.geotag(flight_folders, base_obs, base_nav, user_conf=user_config)
+```
+
+### Base Station Position Options
+
+**Option 1: CSRS-PPP (Recommended)**
+```python
+geotag_df = dgt.geotag(..., sum_file_path="path/to/base.sum")
+```
+
+**Option 2: Manual ECEF Coordinates**
+```python
+user_config = {
+    'ant2-postype': 'xyz',
+    'ant2-pos1': X_meters,
+    'ant2-pos2': Y_meters,
+    'ant2-pos3': Z_meters,
+}
+geotag_df = dgt.geotag(..., user_conf=user_config)
+```
+
+## Troubleshooting
+
+### RTKLIB Not Found
+The library will automatically prompt to download RTKLIB binaries on first use. To skip the prompt:
+```python
+dgt.download_rtklib_bins()
+```
+
+### No PPP Sum File Available
+If you don't have access to CSRS-PPP:
+1. Ensure base station coordinates are accurate (use surveyed position or local PPP)
+2. Provide coordinates via `user_conf` dictionary
+3. Accept slightly higher positional uncertainty (typically ±0.5–1.0 m without PPP refinement)
+
+### Image-Time Mismatch
+Ensure:
+- Camera clock is synchronized within ±1 second of GPS
+- EXIF/XMP timestamps are in UTC (not local time)
+- MRK files cover the same time period as images
+
+## Performance Tips
+
+- Use **IGS Rapid orbits** (available ~17–18 hours after end-of-day UTC) for faster processing
+- Process multiple flights with `geotag([flight1, flight2, ...])` for efficiency
+- For large datasets, filter low-confidence solutions using covariance thresholds
+
+## References
+
+- **RTKLIB**: https://www.rtklib.com/
+- **CSRS-PPP**: https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php
+- **IGS Data**: https://www.igs.org/products/
+- **DJI Documentation**: https://enterprise.dji.com/
 
 ## License
 
@@ -140,3 +444,4 @@ This project is licensed under the BSD 2-Clause (see LICENSE for details).
 
 - Developed at the University of Calgary, Applied Geospatial Research Group ([appliedgrg.ca](https://www.appliedgrg.ca))
 - Inspired by real-world field workflows involving DJI Matrice 350 RTK + Zenmuse P1, Hemisphere base stations, and CSRS-PPP post-processing
+- RTKLIB by Tomoji Takasu

@@ -1,7 +1,5 @@
 from pathlib import Path
-import datetime as dt
 import pandas as pd
-import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
@@ -9,44 +7,50 @@ from tqdm import tqdm
 def parse_img_info(
         img: str,
         add_format_orientation: bool = True
-    ) -> dict:
+    ) -> dict | None:
     """
     Parse a single DJI image's XMP metadata into a flat dictionary.
 
-    This function reads XMP (via Pillow's Image.getxmp()) and extracts:
-      - exposure time (UTCAtExposure)
-      - GNSS position (latitude, longitude, altitude)
-      - flight attitude (FlightYaw/Pitch/Roll)
-      - gimbal attitude (GimbalYaw/Pitch/Roll)
+    This function reads XMP metadata via Pillow (Image.getxmp) and extracts DJI fields:
+      - exposure timestamp: UTCAtExposure (string, UTC)
+      - GNSS position: GpsLatitude / GpsLongitude / AbsoluteAltitude
+      - aircraft attitude: FlightYawDegree / FlightPitchDegree / FlightRollDegree
+      - gimbal attitude:   GimbalYawDegree / GimbalPitchDegree / GimbalRollDegree
 
-    Optionally, it also computes a "formatted" gimbal orientation (`DGT_*Degree`)
-    to reduce DJI gimbal flip discontinuities (e.g., roll jumps between 0/180).
+    If `add_format_orientation=True`, it also appends normalized gimbal angles:
+      - DGT_YawDegree / DGT_PitchDegree / DGT_RollDegree
+    produced by `_format_orientation()` to reduce DJI 0/180 roll flip discontinuities
+    and convert DJI nadir pitch (-90°) into a photogrammetry-friendly convention (0°).
 
-    Parameters:
-    img:
-        Path to the image file (.jpg/.tif).
-    add_format_orientation:
-        If True, add DGT_YawDegree / DGT_PitchDegree / DGT_RollDegree derived from
-        gimbal angles by `_format_orientation()`.
+    Parameters
+    ----------
+    img : str | Path
+        Path to an image file (e.g., .jpg or .tif) containing DJI-style XMP keys.
+    add_format_orientation : bool, default True
+        Whether to include the normalized DGT_* orientation fields.
 
-    Returns:
+    Returns
+    -------
     dict | None
-        Parsed metadata dict. Returns None if:
-          - no XMP metadata is found, or
+        Metadata dictionary on success; otherwise None.
+        Returns None if:
+          - XMP metadata is missing, or
+          - required DJI keys are missing / schema differs, or
           - any exception occurs during parsing.
 
-    Notes:
-    - This expects DJI-style XMP keys (e.g., "UTCAtExposure", "GimbalYawDegree").
-      If the image is not from DJI or the schema differs, keys may be missing.
+    Notes
+    -----
+    This parser is DJI-XMP specific. Non-DJI images or differing firmware schemas may not contain
+    the expected keys and will be skipped.
     """
     img = Path(img)
-
+    
     try:
         with Image.open(img) as im:
             xmp_data = im.getxmp()
         if not xmp_data:
             print(f"[WARNING] No metadata found at {img}. Skipped")
-            return
+            return None
         desc = xmp_data['xmpmeta']['RDF']['Description']
 
         # Exposure time (UTC)
@@ -60,6 +64,7 @@ def parse_img_info(
         gimbal_pitch_deg = float(desc["GimbalPitchDegree"])
         gimbal_yaw_deg   = float(desc["GimbalYawDegree"])    
         # Optional: normalize gimbal orientation (reduce flip discontinuities)
+        fmt_ori = None
         if add_format_orientation:
             fmt_ori = _format_orientation(gimbal_yaw_deg, gimbal_pitch_deg, gimbal_roll_deg)
           
@@ -67,8 +72,8 @@ def parse_img_info(
         meta_dict = {
         "FileName":               img.name,
         "UTCAtExposure":          utc_str,
-        "GPSLatitude":            float(desc["GpsLatitude"]),
-        "GPSLongitude":           float(desc["GpsLongitude"]),
+        "GpsLatitude":            float(desc["GpsLatitude"]),
+        "GpsLongitude":           float(desc["GpsLongitude"]),
         "AbsoluteAltitude":       float(desc["AbsoluteAltitude"]),
         "FlightYawDegree":        flight_yaw_deg,
         "FlightPitchDegree":      flight_pitch_deg,
@@ -80,7 +85,7 @@ def parse_img_info(
         
     except Exception as e:
         print(f"[WARNING] Error occurred while parsing image's metadata. {e}")
-        return
+        return None
 
 
     return meta_dict | fmt_ori if fmt_ori else meta_dict
@@ -89,9 +94,39 @@ def parse_img_dir(
         img_dir: str,
         add_format_orientation: bool = True
     ) -> pd.DataFrame:
+    """
+    Parse DJI image XMP metadata for all images under a flight folder.
 
+    This function scans the directory for:
+      - *.jpg
+      - *.tif
+    (sorted lexicographically), parses each image via `parse_img_info()`, and
+    returns a DataFrame of the successfully extracted records.
+
+    Parameters
+    ----------
+    img_dir : str | Path
+        Directory containing DJI images with XMP metadata.
+    add_format_orientation : bool, default True
+        Passed to `parse_img_info()`. If True, includes DGT_* orientation fields.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per successfully parsed image. The set of columns depends on the
+        available XMP keys and whether `add_format_orientation` is enabled.
+
+    Notes
+    -----
+    - Images without XMP metadata or missing required DJI keys are skipped.
+    - The printed summary shows (total images found, successfully parsed records).
+    """
     img_dir = Path(img_dir)
     image_files = sorted(img_dir.glob("*.jpg")) + sorted(img_dir.glob("*.tif"))
+
+    if not image_files:
+        print(f"[WARNING] No images found in {img_dir}")
+        return pd.DataFrame()
 
     records = []
     for img in tqdm(image_files, desc="[INFO] Gathering image metadata (EXIF/XMP via Pillow)"):
@@ -107,56 +142,46 @@ def parse_img_dir(
 
 
 def _wrap180(a: float) -> float:
+    """Wrap an angle in degrees to the range [-180, 180)."""
     return (a + 180.0) % 360.0 - 180.0
 
 def _wrap360(a: float) -> float:
+    """Wrap an angle in degrees to the range [0, 360)."""
     return (a + 360.0) % 360.0
 
 
-def _format_orientation(yaw: float, pitch: float, roll: float) -> tuple[float, float, float]:
+def _format_orientation(yaw: float, pitch: float, roll: float) -> dict:
     """
-    Normalize DJI gimbal yaw/pitch/roll to a stable and photogrammetry-friendly form.
+    Normalize DJI gimbal yaw/pitch/roll into a stable, photogrammetry-friendly form.
 
-    Purpose:
-    1. DJI gimbal often outputs roll ≈ 0° or 180°.
-       A roll ≈ 180° indicates a 180° flipped solution caused by Euler angle
-       non-uniqueness (gimbal lock / equivalent representation).
+    DJI gimbal angles can exhibit Euler-angle non-uniqueness, commonly seen as roll values
+    near 0° or 180°. A ~180° roll often indicates an equivalent flipped representation.
+    To reduce discontinuities (especially when converting to OPK), this function:
+      1) Wraps yaw/pitch/roll into [-180°, 180°).
+      2) If |roll| > 90°, absorbs a 180° flip by shifting yaw and roll by 180° (then re-wrap).
+      3) Converts DJI pitch convention (nadir ≈ -90°) into a photogrammetry-style pitch
+         where nadir ≈ 0° via: pitch_corrected = pitch + 90°.
+      4) Wraps yaw into [0°, 360°).
 
-    2. Because Euler angles are not unique, the following solutions are equivalent:
-           (ω, ϕ, κ)  ≡  (ω + 180°, ϕ, κ + 180°)
+    Parameters
+    ----------
+    yaw, pitch, roll : float
+        DJI gimbal yaw/pitch/roll in degrees.
 
-       Therefore, when |roll| > 90°, we absorb the 180° flip into yaw,
-       and shift roll back toward 0°. This prevents large κ (kappa)
-       discontinuities during OPK conversion.
-
-    3. DJI pitch definition:
-       - Nadir (camera pointing straight down) ≈ -90°
-       - Photogrammetry convention expects nadir ≈ 0°
-
-       Therefore, we apply:
-           pitch_corrected = pitch + 90°
-
-    Steps:
-    A) Wrap yaw/pitch/roll into [-180°, 180°]
-    B) If roll indicates flipped solution (|roll| > 90°):
-           yaw  += 180°
-           roll += 180°
-       then wrap again
-    C) Convert DJI pitch to photogrammetric pitch (nadir = 0°)
-    D) Wrap yaw into [0°, 360°]
-
-    Returns:
-    dict:
-        DGT_YawDegree
-        DGT_PitchDegree
-        DGT_RollDegree
+    Returns
+    -------
+    dict
+        Dictionary with normalized angles:
+        - DGT_YawDegree   (0–360 degrees)
+        - DGT_PitchDegree (degrees; nadir ≈ 0)
+        - DGT_RollDegree  (degrees; near 0 preferred over 180)
     """
     yaw, pitch, roll = (_wrap180(yaw), _wrap180(pitch), _wrap180(roll))
 
     if abs(roll) > 90:
         yaw, pitch, roll = (_wrap180(yaw + 180.0), _wrap180(pitch), _wrap180(roll + 180.0))
 
-    # ---- (B) pitch nadir 修正：DJI -90 (nadir) -> 0 ----
+    # Convert DJI nadir pitch (-90°) to photogrammetry convention (0° = nadir)
     pitch = pitch + 90.0
 
     # yaw 0~360

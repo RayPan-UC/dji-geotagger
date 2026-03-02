@@ -1,4 +1,3 @@
-
 from pathlib import Path
 import numpy as np
 from dji_geotagger.tools.tools import ECEF2ENU_vec
@@ -10,12 +9,34 @@ def resolve_ppp_sum_file(
     """
     Resolve PPP summary (.sum) file path.
 
-    Priority:
-        1. If user explicitly provides sum_file_path → use it.
-        2. Otherwise, try auto-detect from base_obs directory.
-        3. Raise error if neither works.
-    """
+    Resolution Priority
+    -------------------
+    1. If user explicitly provides `sum_file_path` → use it directly.
+    2. If only `base_obs` provided → auto-detect .sum file in same directory.
+    3. Otherwise → raise error.
 
+    Parameters
+    ----------
+    base_obs : str | Path, optional
+        Path to base station RINEX observation file. Used for auto-detecting .sum file
+        by matching the stem (filename without extension). Default is None.
+    sum_file_path : str | Path, optional
+        Explicit path to PPP summary (.sum) file. Takes priority over auto-detection.
+        Default is None.
+
+    Returns
+    -------
+    Path
+        Resolved .sum file path.
+
+    Raises
+    ------
+    FileNotFoundError
+        If explicit `sum_file_path` does not exist, or if auto-detection from `base_obs`
+        finds no matching .sum file.
+    ValueError
+        If neither `sum_file_path` nor `base_obs` is provided.
+    """
     if base_obs is not None:
         base_obs = Path(base_obs)
 
@@ -57,32 +78,57 @@ def resolve_ppp_sum_file(
 
 
 def sum_file_parser(
-        base_obs: str = None,
-        sum_file_path: str = None,
+        base_obs: str | Path = None,
+        sum_file_path: str | Path = None,
         print_report: bool = False):
     """
     Parse CSRS-PPP .sum file to extract final estimated ECEF position and covariance matrix.
 
-    I also compared the result between PPP report and pymap3d transformation:
-    [INFO] Base LLH               : (55.2942365333°, -114.6254905917°, 560.7136000000 m)
-    [INFO] Base LLH (pymap3d)     : (55.2942365320°, -114.6254905912°, 560.7135461102 m)
-    * The difference is at the sub-millimeter level. Both are absolutely reliable.
+    **Validation Note:**
+    Compared PPP report with pymap3d transformation results:
+    - Base LLH (PPP)     : 55.2942365333°, -114.6254905917°, 560.7136000000 m
+    - Base LLH (pymap3d) : 55.2942365320°, -114.6254905912°, 560.7135461102 m
+    - Difference: sub-millimeter level (both methods absolutely reliable)
 
-    Parameters:
-        base_obs : path to base's .obs file
-        sum_file_path : path to .sum file
+    Parameters
+    ----------
+    base_obs : str | Path, optional
+        Path to base station RINEX observation file. Used to auto-detect .sum file
+        if `sum_file_path` is not explicitly provided. Default is None.
+    sum_file_path : str | Path, optional
+        Explicit path to PPP .sum file. Takes priority over auto-detection from `base_obs`.
+        Default is None.
+    print_report : bool, optional
+        If True, print detailed coordinate and uncertainty report to console.
+        Default is False.
 
-    Returns:
-        dict with keys:
-            X, Y, Z         : ECEF coordinates (m)
-            lat_dd, lon_dd  : decimal degrees
-            hgt             : ellipsoidal height (m)
-            cov_PPP_ECEF        : 3x3 covariance matrix in ECEF (m^2)
-            cov_PPP_ENU         : 3x3 covariance matrix in ENU (m^2)
-            sigma_ENU       : 1-sigma [sE, sN, sU] (m)
-            coord_sys       : coordinate system string (e.g. IGb20)
+    Returns
+    -------
+    dict
+        Dictionary containing parsed PPP results:
+        
+        Coordinates
+        -----------
+        - X, Y, Z : ECEF coordinates (metres)
+        - lat_dd : latitude in decimal degrees
+        - lon_dd : longitude in decimal degrees
+        - hgt : ellipsoidal height (metres)
+        - coord_sys : coordinate system string (e.g., "IGb20")
+        
+        Covariance & Uncertainty
+        ------------------------
+        - cov_PPP_ECEF : 3×3 covariance matrix in ECEF (m²)
+        - cov_PPP_ENU : 3×3 covariance matrix in ENU (m²)
+        - PPP_sigma_ECEF : 1-sigma standard deviations [σX, σY, σZ] (metres)
+        - PPP_sigma_ENU : 1-sigma standard deviations [σE, σN, σU] (metres)
+
+    Raises
+    ------
+    FileNotFoundError
+        If .sum file cannot be found or resolved.
+    ValueError
+        If required POS entries are missing or could not be parsed from .sum file.
     """
-
     # Check exist
     sum_file_path = resolve_ppp_sum_file(base_obs, sum_file_path)
     

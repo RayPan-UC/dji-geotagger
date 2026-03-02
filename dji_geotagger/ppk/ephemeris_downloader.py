@@ -12,7 +12,22 @@ from dji_geotagger.tools.tools import utc2gps
 
 def parse_obs_time_range(obs_file: Path) -> tuple[datetime, datetime]:
     """
-    Parse RINEX observation file to extract TIME OF FIRST/LAST OBS as datetime objects.
+    Parse RINEX observation file to extract the first and last epoch as UTC datetime objects.
+
+    Parameters
+    ----------
+    obs_file : Path
+        RINEX observation file (.obs / .rnx).
+
+    Returns
+    -------
+    tuple[datetime, datetime]
+        (t_start, t_end) — timezone-aware UTC datetimes.
+
+    Raises
+    ------
+    ValueError
+        If fewer than 2 epochs are found in the file.
     """
     times = gr.gettime(obs_file)
     if len(times) < 2:
@@ -26,14 +41,28 @@ def parse_obs_time_range(obs_file: Path) -> tuple[datetime, datetime]:
 
 def download_file(url: str, dest: Path) -> bool:
     """
-    Download a .gz file from the given URL, extract its contents, and remove the .gz file.
+    Download a gzip-compressed file, decompress it, and remove the .gz archive.
 
-    Parameters:
-        url (str): The URL of the file to download.
-        dest (Path): The destination path to save the .gz file.
+    The function treats `dest` as the target path for the downloaded `.gz` file.
+    After download, it extracts to `dest.with_suffix('')` and deletes the `.gz`.
 
-    Returns:
-        bool: True if the file was successfully downloaded and extracted, False otherwise.
+    Parameters
+    ----------
+    url : str
+        Remote URL of a `.gz` file.
+    dest : Path
+        Local destination path for the downloaded `.gz`.
+
+    Returns
+    -------
+    bool
+        True if the decompressed output exists (download performed or already present),
+        False otherwise.
+
+    Notes
+    -----
+    - If the decompressed file already exists, the download is skipped.
+    - This implementation downloads the response into memory (non-streaming).
     """
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -80,10 +109,35 @@ def download_file(url: str, dest: Path) -> bool:
 def ephemeris_downloader(
     utc_time: datetime,
     CODE_products: bool,
-    type: str = "FINAL",  # or RAPID
+    product_type: str = "FINAL",  # or RAPID
     igs_dir: Path = Path("temp/ephemeris")
-) -> bool:
+)-> list[Path]:
+    """
+    Download and extract precise orbit/clock products for a given UTC day.
 
+    This function constructs product URLs for a GPS day (derived from `utc_time`)
+    and downloads each `.gz` file into `igs_dir`. Each archive is decompressed and
+    the `.gz` is removed. The returned paths point to the decompressed files.
+
+    Parameters
+    ----------
+    utc_time : datetime
+        Any UTC datetime within the target day (date portion is used).
+    CODE_products : bool
+        If True, also download CODE products in addition to IGS products.
+    product_type : {"FINAL", "RAPID"}, default "FINAL"
+        Latency tier:
+        - FINAL: highest accuracy, longer latency
+        - RAPID: lower latency
+    igs_dir : Path, default Path("temp/ephemeris")
+        Output directory for downloaded and extracted products.
+
+    Returns
+    -------
+    list[Path]
+        Paths to decompressed product files (e.g., *.SP3, *.CLK).
+        Returns an empty list if nothing was downloaded successfully.
+    """
     gps_time_dict = utc2gps(utc_time)
     yyyy = gps_time_dict.get("yyyy")
     wwww = gps_time_dict.get("gps_week")
@@ -91,7 +145,7 @@ def ephemeris_downloader(
 
     dest_files = []
 
-    if type == "FINAL":
+    if product_type == "FINAL":
         urls = [
             f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSFIN_{yyyy}{ddd}0000_01D_15M_ORB.SP3.gz",
             f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSFIN_{yyyy}{ddd}0000_01D_30S_CLK.CLK.gz"
@@ -102,7 +156,7 @@ def ephemeris_downloader(
                 f"http://garner.ucsd.edu/pub/products/{wwww}/COD0OPSFIN_{yyyy}{ddd}0000_01D_05S_CLK.CLK.gz"
             ]
 
-    elif type == "RAPID":
+    elif product_type == "RAPID":
         urls = [
             f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSRAP_{yyyy}{ddd}0000_01D_15M_ORB.SP3.gz",
             f"http://garner.ucsd.edu/pub/products/{wwww}/IGS0OPSRAP_{yyyy}{ddd}0000_01D_05M_CLK.CLK.gz"
@@ -126,10 +180,37 @@ def download_igs_data(
     base_obs_path: str,
     igs_dir: Path = None,
     CODE_products: bool = True
-) -> str:
+) -> list[Path]:
     """
-    Try to download highest quality IGS data available for the given days in obs file.
-    Return level of data obtained: "Final", "Rapid", or "Broadcast".
+    Download precise ephemeris (SP3) and clock (CLK) files covering the observation time span.
+
+    The observation date range is derived from the base station RINEX observation file
+    via `parse_obs_time_range()`. For each UTC day in that span, this function attempts:
+
+      1) FINAL products
+      2) RAPID products
+
+    If all required days succeed at a given tier, returns the list of decompressed ephemeris files.
+
+    Parameters
+    ----------
+    base_obs_path : str | Path
+        Base station RINEX observation file used to determine required dates.
+    igs_dir : Path, optional
+        Destination directory for downloaded products. Defaults to:
+        <cwd>/DGT_output/PPK_result/Ephemeris
+    CODE_products : bool, default True
+        If True, also attempt CODE products.
+
+    Returns
+    -------
+    list[Path]
+        Paths to decompressed ephemeris/clock files (*.SP3, *.CLK) for all required days.
+
+    Raises
+    ------
+    RuntimeError
+        If both FINAL and RAPID downloads fail for any required day.
     """
 
     # input
@@ -153,7 +234,7 @@ def download_igs_data(
         eph_files = []
         for d in day_list:
             files = ephemeris_downloader(
-                d, type=level, CODE_products=CODE_products, igs_dir=igs_dir
+                d, product_type=level, CODE_products=CODE_products, igs_dir=igs_dir
             )
             if not files:
                 success = False
@@ -171,6 +252,7 @@ def download_igs_data(
     raise RuntimeError(ephemeris_download_fail())
 
 def ephemeris_download_fail():
+    """Return a formatted error message for ephemeris download failure."""
     return("""
 [WARNING] Failed to download ephemeris data (.sp3 / .clk).
             - You can manually download them from: https://igs.org/products/#orbits_clocks"

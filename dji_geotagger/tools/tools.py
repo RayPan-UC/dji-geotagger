@@ -10,8 +10,34 @@ def ECEF2ENU_vec(
         cov_ecef: np.ndarray, 
         lon_deg: float, 
         lat_deg: float
-    ):
+    ) -> np.ndarray:
+    """
+    Transform a 3×3 covariance matrix from ECEF to ENU (East-North-Up) frame.
 
+    Uses the Jacobian rotation matrix to convert position uncertainty covariance
+    from Earth-Centered, Earth-Fixed (ECEF) coordinates to local topocentric 
+    East-North-Up (ENU) coordinates at a given geographic location.
+
+    Parameters
+    ----------
+    cov_ecef : np.ndarray
+        3×3 covariance matrix in ECEF frame (m²).
+    lon_deg : float
+        Geodetic longitude in decimal degrees.
+    lat_deg : float
+        Geodetic latitude in decimal degrees.
+
+    Returns
+    -------
+    np.ndarray
+        3×3 covariance matrix in ENU frame (m²).
+        Diagonal elements [0,0], [1,1], [2,2] represent σE², σN², σU² respectively.
+
+    Notes
+    -----
+    Transformation formula: Cov_ENU = R @ Cov_ECEF @ R^T
+    where R is the rotation matrix from ECEF to ENU at (lat, lon).
+    """
     lon_rad = np.radians(lon_deg)
     lat_rad = np.radians(lat_deg)
     R = np.array([
@@ -21,9 +47,38 @@ def ECEF2ENU_vec(
     ])
     return R @ cov_ecef @ R.T
 
-def NED2ECEF_vec(dN, dE, dD, lat_deg, lon_deg):
+
+def NED2ECEF_vec(dN, dE, dD, lat_deg, lon_deg) -> np.ndarray:
     """
     Convert a vector from local NED frame to ECEF frame (vector only, no translation).
+
+    Performs rotation from North-East-Down (NED) local topocentric frame to Earth-Centered,
+    Earth-Fixed (ECEF) frame. This is a pure rotation; no translation is applied.
+
+    Parameters
+    ----------
+    dN : float | np.ndarray
+        North component (metres).
+    dE : float | np.ndarray
+        East component (metres).
+    dD : float | np.ndarray
+        Down component (metres, positive downward).
+    lat_deg : float
+        Geodetic latitude in decimal degrees.
+    lon_deg : float
+        Geodetic longitude in decimal degrees.
+
+    Returns
+    -------
+    np.ndarray
+        3-element vector in ECEF coordinates (ΔX, ΔY, ΔZ) in metres.
+
+    Notes
+    -----
+    NED Frame: North, East, Down (positive downward)
+    ECEF Frame: X, Y, Z (Earth-centered, Earth-fixed)
+    
+    The transformation uses a rotation matrix that depends on local latitude and longitude.
     Assumes NED with D = Down (positive downward).
     """
     lat = np.radians(lat_deg)
@@ -38,17 +93,36 @@ def NED2ECEF_vec(dN, dE, dD, lat_deg, lon_deg):
     vec_ned = np.array([dN, dE, dD], dtype=float)
     return R @ vec_ned
 
-def utc2gps(dt_obj: dt.datetime):
-    """
-    Convert UTC datetime to:
-    - Gregorian year
-    - Day-of-year (DDD)
-    - GPS week
-    - GPS day (0=Sunday, ..., 6=Saturday)
-    - GPS time-of-week (seconds)
 
-    Returns:
-        Tuple: (yyyy, ddd, gps_week, gps_day, gps_tow)
+def utc2gps(dt_obj: dt.datetime) -> dict:
+    """
+    Convert UTC datetime to GPS time parameters.
+
+    Converts a UTC datetime object to GPS week number, GPS day of week, and GPS time-of-week (TOW).
+    Includes leap seconds in the conversion using astropy.
+
+    Parameters
+    ----------
+    dt_obj : datetime.datetime
+        UTC datetime object to convert.
+
+    Returns
+    -------
+    dict
+        Dictionary with GPS time components:
+        
+        - yyyy (int): Gregorian year
+        - ddd (int): Day-of-year (1-366)
+        - gps_week (int): GPS week number (since 1980-01-06)
+        - gps_day (int): GPS day of week (0=Sunday, 6=Saturday)
+        - gps_tow (float): GPS time-of-week in seconds (0-604800)
+
+    Notes
+    -----
+    - GPS time includes leap seconds (uses astropy Time with scale='utc')
+    - GPS week 0 started on 1980-01-06
+    - GPS day numbering: Sunday=0, Monday=1, ..., Saturday=6
+    - Datetime weekday() returns: Monday=0, ..., Sunday=6 (converted internally)
     """
     t = Time(dt_obj, scale="utc")
     delta = t.gps  # GPS seconds since 1980/1/6, leap seconds included
@@ -64,26 +138,48 @@ def utc2gps(dt_obj: dt.datetime):
     ddd  = dt_obj.timetuple().tm_yday
 
     return {
-    "yyyy":     yyyy,
-    "ddd":      ddd,
-    "gps_week": gps_week,
-    "gps_day":  gps_day,
-    "gps_tow":  gps_tow,
+        "yyyy":     yyyy,
+        "ddd":      ddd,
+        "gps_week": gps_week,
+        "gps_day":  gps_day,
+        "gps_tow":  gps_tow,
     }
     
+
 def vector_enu2ecef(lat_dd: float, lon_dd: float, dE: float, dN: float, dU: float) -> np.ndarray:
     """
-    Converts a local correction vector from ENU (East-North-Up) to ECEF (Earth-Centered, Earth-Fixed).
+    Convert a local correction vector from ENU to ECEF coordinates.
 
-    Parameters:
-        lat -- geodetic latitude in degree
-        lon -- geodetic longitude in degree
-        dE  -- correction in East direction (metres)
-        dN  -- correction in North direction (metres)
-        dU  -- correction in Up direction (metres)
+    Transforms a vector expressed in the local East-North-Up (ENU) topocentric frame
+    to Earth-Centered, Earth-Fixed (ECEF) coordinates. This is a pure vector rotation
+    with no translation.
 
-    Returns:
-        (3, 1) numpy array -- correction vector in ECEF coordinates (ΔX, ΔY, ΔZ)
+    Parameters
+    ----------
+    lat_dd : float
+        Geodetic latitude in decimal degrees.
+    lon_dd : float
+        Geodetic longitude in decimal degrees.
+    dE : float | np.ndarray
+        Correction in East direction (metres).
+    dN : float | np.ndarray
+        Correction in North direction (metres).
+    dU : float | np.ndarray
+        Correction in Up direction (metres).
+
+    Returns
+    -------
+    np.ndarray
+        (3, 1) numpy array with correction vector in ECEF (ΔX, ΔY, ΔZ) in metres.
+
+    Notes
+    -----
+    The transformation uses the transpose of the rotation matrix from ECEF to ENU:
+    ΔP_ECEF = R^T @ [dE, dN, dU]^T
+    
+    Coordinate Systems:
+    - ENU: East (X), North (Y), Up (Z) in local tangent plane
+    - ECEF: X, Y, Z in Earth-centered, Earth-fixed frame
     """
     lat = np.radians(lat_dd)
     lon = np.radians(lon_dd)
@@ -96,198 +192,3 @@ def vector_enu2ecef(lat_dd: float, lon_dd: float, dE: float, dN: float, dU: floa
     enu_vector = np.array([[dE], [dN], [dU]])
     ecef_vector = R.T @ enu_vector
     return ecef_vector
-
-##################################################################################
-
-
-
-
-def covariance_ecef_to_enu(cov_ecef: np.ndarray, lon_deg: float, lat_deg: float) -> np.ndarray:
-    lon_rad = np.radians(lon_deg)
-    lat_rad = np.radians(lat_deg)
-    R = np.array([
-        [-np.sin(lon_rad),               np.cos(lon_rad),              0],
-        [-np.sin(lat_rad)*np.cos(lon_rad), -np.sin(lat_rad)*np.sin(lon_rad), np.cos(lat_rad)],
-        [ np.cos(lat_rad)*np.cos(lon_rad),  np.cos(lat_rad)*np.sin(lon_rad), np.sin(lat_rad)]
-    ])
-    return R @ cov_ecef @ R.T
-
-def get_crs_igb20() -> CRS:
-    """
-    Returns a pyproj CRS object representing the IGb20 reference frame.
-    Equivalent to EPSG:10783. https://epsg.io/10783
-
-    Returns:
-        pyproj.CRS: Ellipsoidal 3D geographic CRS for IGb20 (lat/lon/height).
-    """
-    return CRS.from_wkt("""
-        GEOCCS["IGb20",
-            DATUM["IGb20",
-                SPHEROID["GRS 1980",6378137,298.257222101,
-                    AUTHORITY["EPSG","7019"]],
-                AUTHORITY["EPSG","1400"]],
-            PRIMEM["Greenwich",0,
-                AUTHORITY["EPSG","8901"]],
-            UNIT["metre",1,
-                AUTHORITY["EPSG","9001"]],
-            AXIS["Geocentric X",OTHER],
-            AXIS["Geocentric Y",OTHER],
-            AXIS["Geocentric Z",NORTH],
-            AUTHORITY["EPSG","10783"]]
-    """)
-
-def flatten_matrix(matrix) -> str:
-    """
-    Flatten a 3x3 matrix or 9-element list into a space-separated string.
-    """
-    arr = np.array(matrix).flatten()
-    return " ".join(f"{v:.8f}" for v in arr)
-
-def unflatten_matrix(text: str) -> np.ndarray:
-    """
-    Parse a space-separated 9-element string into a 3x3 numpy array.
-    """
-    values = [float(v) for v in text.strip().split()]
-    if len(values) != 9:
-        raise ValueError("Input string must contain exactly 9 float values.")
-    return np.array(values).reshape(3, 3)
-
-def transform_coordinates(
-    df: pd.DataFrame,
-    target_crs,
-    source_crs = get_crs_igb20(),
-    x_col: str = "x_ecef",
-    y_col: str = "y_ecef",
-    z_col: str = "z_ecef",
-    out_x: str = "x_tgt",
-    out_y: str = "y_tgt",
-    out_z: str = "z_tgt",
-    cov_ecef2enu: bool = False,
-    drop_original: bool = False
-) -> pd.DataFrame:
-    """
-    Transform coordinates from a source CRS to a target CRS and optionally convert ECEF covariance to ENU standard deviations.
-
-    This function transforms 3D coordinates (typically from ECEF) into a target CRS (e.g., UTM).
-    If `cov_ecef2enu` is True and the input DataFrame contains a flattened ECEF covariance matrix (`cov_ecef_flat`),
-    it will also compute ENU-direction standard deviations using per-point latitude/longitude converted from ECEF.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame containing coordinates and optionally covariance data.
-    source_crs : int, str, or pyproj.CRS
-        Source coordinate reference system (e.g., 4978 for ECEF).
-    target_crs : int, str, or pyproj.CRS
-        Target coordinate reference system (e.g., 32612 for UTM Zone 12N).
-    x_col : str, default "x_ecef"
-        Column name for X-coordinate in source CRS.
-    y_col : str, default "y_ecef"
-        Column name for Y-coordinate in source CRS.
-    z_col : str, default "z_ecef"
-        Column name for Z-coordinate in source CRS.
-    out_x : str, default "x_tgt"
-        Output column name for transformed X.
-    out_y : str, default "y_tgt"
-        Output column name for transformed Y.
-    out_z : str, default "z_tgt"
-        Output column name for transformed Z.
-    cov_ecef2enu : bool, default False
-        Whether to convert ECEF covariance to ENU standard deviations (`sd_E`, `sd_N`, `sd_U`).
-        Requires a `cov_ecef_flat` column (list or string of 9 elements representing 3×3 ECEF covariance).
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with additional columns:
-        - out_x, out_y, (and out_z if z_col is provided): Transformed coordinates in target CRS.
-        - sd_E, sd_N, sd_U (if cov_ecef2enu is True): ENU standard deviations derived from ECEF covariance.
-    """
-    src = CRS.from_user_input(source_crs)
-    tgt = CRS.from_user_input(target_crs)
-    transformer = Transformer.from_crs(src, tgt, always_xy=True)
-
-    # Transform coordinates
-    if z_col and z_col in df.columns:
-        x_t, y_t, z_t = transformer.transform(
-            df[x_col].values,
-            df[y_col].values,
-            df[z_col].values
-        )
-        df[out_x] = x_t
-        df[out_y] = y_t
-        df[out_z] = z_t
-    else:
-        x_t, y_t = transformer.transform(
-            df[x_col].values,
-            df[y_col].values
-        )
-        df[out_x] = x_t
-        df[out_y] = y_t
-
-    # Covariance transformation (ECEF → ENU)
-    if cov_ecef2enu and 'cov_ecef_flat' in df.columns:
-        sd_E, sd_N, sd_U = [], [], []
-
-        #  ECEF → LLH 
-        transformer_llh = Transformer.from_crs("EPSG:4978", "EPSG:4326", always_xy=True)
-
-        for _, row in df.iterrows():
-            # cov_flat to 3x3 matrix
-            cov_flat = row['cov_ecef_flat']
-            cov_ecef_matrix = unflatten_matrix(cov_flat)
-
-            # transfer to LLH
-            lon, lat, _ = transformer_llh.transform(
-                row[x_col], row[y_col], row[z_col] if z_col else 0.0
-            )
-
-            # cov ecef to ENU
-            enu_cov = covariance_ecef_to_enu(cov_ecef_matrix, lon, lat)
-            cov_enu_flat = flatten_matrix(enu_cov)
-            sd_E.append(np.sqrt(enu_cov[0, 0]))
-            sd_N.append(np.sqrt(enu_cov[1, 1]))
-            sd_U.append(np.sqrt(enu_cov[2, 2]))
-
-        df['sd_E'] = sd_E
-        df['sd_N'] = sd_N
-        df['sd_U'] = sd_U
-        df["cov_enu_flat"] = cov_enu_flat
-
-        if drop_original:
-            df = df.drop(columns=["x_ecef", "y_ecef", "z_ecef", "sd_x_ecef", "sd_y_ecef", "sd_z_ecef", "cov_ecef_flat"], errors="ignore")
-            
-    return df
-
-
-def pause_for_PPP_sum_file():
-    print("\n[PAUSE] If you already have a CSRS-PPP .sum file, enter its full path.\n[PAUSE] Otherwise, press Enter to skip and continue PPK without .sum file.")
-    ppp_sum_file = None
-    while True:
-        try:
-            user_in = input("Path to PPP .sum (or press Enter to skip): ").strip().strip('"')
-        except KeyboardInterrupt:
-            print("\n[INFO] Interrupted by user.")
-            raise
-
-        if user_in == "":
-            print("[INFO] Skipping PPP .sum; running PPK with base station only.")
-            break
-
-        p = Path(user_in).expanduser().resolve()
-        if p.exists() and p.suffix.lower() == ".sum":
-            ppp_sum_file = p
-            print(f"[INFO] Using PPP .sum file: {ppp_sum_file}")
-            break
-        else:
-            print("[WARN] Invalid path or not a .sum file. Try again, or press Enter to skip.")
-
-    return ppp_sum_file
-
-
-def save_csv(final_df: pd.DataFrame):
-    import datetime
-    output_csv = Path(f"geotag_output/geotagged_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    output_csv.parent.mkdir(parents=True, exist_ok=True)
-    final_df.to_csv(output_csv, index=False)
-    print(f"[INFO] Exported geotagged data to: {output_csv}")

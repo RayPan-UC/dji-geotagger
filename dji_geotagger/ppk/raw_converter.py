@@ -11,26 +11,57 @@ def raw2rinex(
     antenna_height_in_meter: float = 0.0,
     appr_time: str = None,
     RTKLIB: str = None,
-    ) -> Path:
+    ) -> tuple[Path, Path]:
     """
-    Convert raw GNSS files (e.g., .dat, .bin) to RINEX using RTKLIB convbin.
-    - .bin -> rover (UAV)
-    - .dat -> base
+    Convert raw GNSS files (.dat, .bin) to RINEX format using RTKLIB convbin.
 
-    Parameters:
-    input_path : Path
-        Raw GNSS file path (.bin / .dat)
-    output_dir : Optional[Path]
-        Output base directory. Default: current working directory.
-    antenna_height_in_meter : float
-        Antenna height (m). If <=0 or None-like, treated as 0.0
-    appr_time : Optional[str]
-        Approx time in "YYYYMMDD HHMM" (UTC).
-        If None, try parse from filename token "YYYYmmddHHMMSS" or "YYYYmmddHHMM".
-    RTKLIB: str = None,
+    File Type Mapping
+    -----------------
+    - .bin → Rover (UAV) GNSS data
+    - .dat → Base station GNSS data
 
-    Returns:
-    (obs_path, nav_path) : Tuple[Path, Path]
+    Parameters
+    ----------
+    input_path : str | Path
+        Path to raw GNSS file (.bin or .dat).
+    output_dir : str | Path, optional
+        Output base directory for RINEX files. If not provided, defaults to current working directory.
+        RINEX files will be saved to: `output_dir/DGT_output/RINEX/{rover(UAV)|base}/`
+        Default is None.
+    antenna_height_in_meter : float, optional
+        Antenna height above ground in metres. If ≤0 or None, treated as 0.0 m.
+        Default is 0.0.
+    appr_time : str, optional
+        Approximate observation start time in format "YYYYMMDD HHMM" (UTC).
+        If not provided, the function attempts to parse timestamp from filename tokens.
+        Supported filename formats: "YYYYmmddHHMMSS" or "YYYYmmddHHMM".
+        Default is None.
+    RTKLIB : str | Path, optional
+        Path to RTKLIB installation directory. If not provided, uses system default.
+        Default is None.
+
+    Returns
+    -------
+    tuple[Path, Path]
+        A tuple containing:
+        - obs_path (Path): Path to generated RINEX observation file (.obs)
+        - nav_path (Path): Path to generated RINEX navigation file (.nav)
+
+    Raises
+    ------
+    FileNotFoundError
+        If input file does not exist.
+    ValueError
+        If `appr_time` format is invalid, or if no valid timestamp can be parsed from filename.
+    ValueError
+        If file extension is not .bin or .dat.
+    RuntimeError
+        If RTKLIB convbin conversion fails.
+
+    Notes
+    -----
+    - If output files already exist, conversion is skipped and existing paths are returned.
+    - For .dat (base station) files, a PPP processing hint is automatically displayed.
     """
     # Check file exist
     input_path = Path(input_path)
@@ -126,12 +157,39 @@ def raw2rinex(
     return obs_path, nav_path
     
 
-def PPP_help(obs_path:Path):
+def PPP_help(obs_path: Path):
     """
-    NRCan Product:
-      - Ultra-rapid: ~1–2 hours after last epoch
-      - Rapid: ~17–18 hours after end of day (UTC)
-      - Final: ~12–15 days after end of week (UTC Sunday)
+    Display CSRS-PPP product tier availability estimate and submission instructions.
+
+    Based on the last observation epoch in the RINEX file, this function estimates
+    which NRCan precise orbit/clock product tier is currently available and provides
+    instructions for submitting the data to CSRS-PPP for post-processing.
+
+    Parameters
+    ----------
+    obs_path : Path
+        Path to RINEX observation file (.obs).
+
+    Returns
+    -------
+    None
+        Prints status and instructions to console.
+
+    Notes
+    -----
+    Product Availability Timeline:
+    - Ultra-rapid orbits: ~1–2 hours after last observation epoch
+    - Rapid orbits: ~17–18 hours after end of day (UTC)
+    - Final orbits: ~12–15 days after end of calendar week (UTC Sunday)
+
+    CSRS-PPP Submission Steps:
+    1. Extract the .obs file from the PPK output directory
+    2. Upload to https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php
+    3. Select positioning mode: "Static"
+    4. Select coordinate system: "ITRF"
+    5. Download result .sum file when processing completes
+    6. Place .sum file in the same directory as the .obs file
+    7. Re-run DJI-Geotagger PPK processing with the .sum file path
     """
     # get last epoch
     times = gr.gettime(obs_path)

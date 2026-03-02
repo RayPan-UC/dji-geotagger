@@ -10,22 +10,43 @@ def compute_camera_position(
     full_output: bool = False    
 ) -> pd.DataFrame:
     """
-    Compute corrected camera center ECEF position for each exposure epoch.
+    Compute corrected camera center positions for each exposure epoch.
 
-    Pipeline:
-        1. match_mrk_xml        : merge MRK and image XML metadata by seq
-        2. interpolate_pos_at_exposure : interpolate PPK antenna position to exposure epochs
-        3. apply_gimbal_correction     : shift antenna ECEF to camera center ECEF
+    This function builds an exposure-level table by:
+      1) `match_mrk_xml`              : merge MRK records and image metadata by sequence index (seq)
+      2) `interpolate_pos_at_exposure`: interpolate rover PPK antenna ECEF positions to exposure epochs
+      3) `apply_gimbal_correction`    : apply lever-arm (ECEF) to shift antenna phase center -> camera center
+      4) `format_output`             : reshape output columns (e.g., split ENU sigma) and optionally filter columns
+
+    Parameters
+    ----------
+    mrk_df : pd.DataFrame
+        Parsed MRK table. Must include:
+        - seq, GPS_time
+        - gimbal_dX, gimbal_dY, gimbal_dZ (lever-arm in ECEF, metres)
+        - rtk_status (optional but recommended)
+    img_df : pd.DataFrame
+        Parsed image metadata table. Must include:
+        - FileName, UTCAtExposure
+        - (optional) DGT_YawDegree, DGT_PitchDegree, DGT_RollDegree
+    pos_df : pd.DataFrame
+        Rover PPK trajectory (ECEF). Must include:
+        - GPS_time, X, Y, Z
+        - cov_total_ECEF, sigma_total_ECEF, sigma_total_ENU (as object arrays)
+        - coord_sys (string; usually from PPP .sum)
+    full_output : bool, default False
+        If True, return all intermediate columns (MRK + image metadata + interpolated fields).
+        If False, return a compact set of core fields for geotagging / photogrammetry import.
 
     Returns
     -------
     pd.DataFrame
-        One row per image with columns:
-            cam_X, cam_Y, cam_Z     : camera center ECEF (m)
-            cam_lat, cam_lon, cam_h : camera center LLH (deg, deg, m)
-            cov_total_ECEF          : covariance matrix (m²)
-            sigma_total_ENU         : 1-sigma ENU (m)
-            ... (all MRK + XML metadata columns)
+        Exposure-level table. Always contains camera center coordinates:
+        - cam_X, cam_Y, cam_Z (ECEF metres)
+        - cam_lat, cam_lon (degrees), cam_h (ellipsoidal height, metres)
+
+        When `full_output=False`, the output is reduced to a core subset (see `format_output`).
+        When `full_output=True`, all merged columns are retained.
     """
     # Step 1
     exposure_df = match_mrk_xml(mrk_df, img_df)
@@ -45,16 +66,27 @@ def compute_camera_position(
 
 def match_mrk_xml(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Match MRK records with image XML metadata by sequence index.
+    Merge MRK records with image metadata by DJI exposure sequence index (`seq`).
 
-    MRK seq is 1-based. img_df is sorted by filename and assigned seq accordingly.
+    Notes
+    -----
+    - DJI MRK `seq` is 1-based.
+    - This function sorts `img_df` by `FileName` and assigns `seq = index + 1`.
+      (i.e., it assumes filename order matches exposure order.)
+    - Uses an inner join; unmatched rows on either side are dropped.
+
+    Parameters
+    ----------
+    mrk_df : pd.DataFrame
+        Must contain `seq`.
+    img_df : pd.DataFrame
+        Must contain `FileName`. Will be sorted and assigned a new `seq` column.
 
     Returns
     -------
     pd.DataFrame
-        Merged DataFrame with MRK GNSS data + XML metadata per image.
+        Merged exposure metadata table with MRK + image fields.
     """
-    # img_df 
     img_df = img_df.sort_values("FileName").reset_index(drop=True)
     img_df["seq"] = img_df.index + 1  # 1-based
 
@@ -79,11 +111,39 @@ def interpolate_pos_at_exposure(
     exposure_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Linearly interpolate PPK rover ECEF position to each exposure epoch.
-    Covariance is not interpolated; nearest epoch covariance is used instead.
+    Interpolate rover PPK antenna ECEF positions to exposure epochs.
 
-    Outside-coverage exposures will have NaN for:
-        X, Y, Z, cov_total_ECEF, sigma_total_ECEF, sigma_total_ENU
+    Position interpolation:
+    - Uses linear interpolation for X/Y/Z over GPS time-of-week (seconds).
+
+    Covariance / sigma handling:
+    - Covariance is NOT interpolated.
+    - For exposures inside the PPK time span, covariance/sigma are copied from the
+      nearest PPK epoch (nearest-neighbor assignment).
+
+    Out-of-coverage handling:
+    - If an exposure epoch lies outside the PPK trajectory time range, this function
+      sets X/Y/Z and covariance/sigma fields to NaN to prevent accidental use of
+      endpoint-extrapolated values.
+
+    Parameters
+    ----------
+    pos_df : pd.DataFrame
+        PPK trajectory with at least:
+        - GPS_time, X, Y, Z
+        - cov_total_ECEF, sigma_total_ECEF, sigma_total_ENU
+        - coord_sys (string)
+    exposure_df : pd.DataFrame
+        Exposure table with:
+        - GPS_time (from MRK)
+
+    Returns
+    -------
+    pd.DataFrame
+        `exposure_df` with added columns:
+        - X, Y, Z (interpolated antenna ECEF, metres)
+        - cov_total_ECEF (3x3, object dtype), sigma_total_ECEF (len-3), sigma_total_ENU (len-3)
+        - coord_sys (copied from pos_df first record)
     """
 
     pos_t = pos_df["GPS_time"].values
@@ -131,7 +191,7 @@ def interpolate_pos_at_exposure(
         exposure_df.loc[inside_rows, "sigma_total_ECEF"] = pos_df["sigma_total_ECEF"].iloc[nearest_idx].values
         exposure_df.loc[inside_rows, "sigma_total_ENU"] = pos_df["sigma_total_ENU"].iloc[nearest_idx].values
 
-    # Coordinate system from .sum file (still ok)
+    # Propagate coordinate system label from PPK trajectory
     exposure_df["coord_sys"] = pos_df["coord_sys"].iloc[0]
 
     print(f"[INFO] Interpolated PPK position for {len(exposure_df)} exposure epochs")
@@ -139,28 +199,30 @@ def interpolate_pos_at_exposure(
 
 def apply_gimbal_correction(exposure_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Shift interpolated PPK antenna phase center to camera CMOS center
-    by applying the lever-arm offset in ECEF frame.
+    Apply lever-arm correction (ECEF) to shift antenna phase center -> camera center.
 
-    The lever-arm vector (gimbal_dX/Y/Z) is pre-computed in parse_mrk()
-    by converting DJI MRK NED offsets to ECEF using per-epoch lat/lon.
+    The lever-arm vector (gimbal_dX, gimbal_dY, gimbal_dZ) must already be in ECEF metres,
+    typically converted from DJI MRK NED offsets using per-epoch lat/lon.
 
-        cam_ECEF = antenna_ECEF + leverarm_ECEF
+        cam_ecef = antenna_ecef + leverarm_ecef
 
     Parameters
     ----------
     exposure_df : pd.DataFrame
         Must contain:
-            X, Y, Z             : interpolated PPK antenna position (ECEF, m)
-            gimbal_dX/Y/Z       : lever-arm vector (ECEF, m)
+        - X, Y, Z (antenna ECEF, metres)
+        - gimbal_dX, gimbal_dY, gimbal_dZ (lever-arm ECEF, metres)
 
     Returns
     -------
     pd.DataFrame
-        exposure_df with additional columns:
-            cam_X, cam_Y, cam_Z : camera center ECEF (m)
-            cam_lat, cam_lon    : camera center geodetic (deg)
-            cam_h               : camera center ellipsoidal height (m)
+        Adds camera center fields:
+        - cam_X, cam_Y, cam_Z (ECEF metres)
+        - cam_lat, cam_lon (degrees), cam_h (ellipsoidal height, metres)
+
+    Notes
+    -----
+    - If antenna coordinates are NaN (e.g., out-of-coverage exposures), camera outputs will also be NaN.
     """
     exposure_df['cam_X'] = exposure_df['X'] + exposure_df['gimbal_dX']
     exposure_df['cam_Y'] = exposure_df['Y'] + exposure_df['gimbal_dY']
@@ -181,15 +243,33 @@ def apply_gimbal_correction(exposure_df: pd.DataFrame) -> pd.DataFrame:
 
 def format_output(df: pd.DataFrame, full_output: bool = False) -> pd.DataFrame:
     """
-    Format final camera position DataFrame for output.
-    Splits sigma_total_ENU array into individual columns and
-    optionally filters to core columns only.
+    Format the exposure table into an output-ready DataFrame.
+
+    Operations
+    ----------
+    1) Split `sigma_total_ENU` (array-like: [sE, sN, sU]) into three scalar columns:
+       - sigma_E, sigma_N, sigma_U
+       If `sigma_total_ENU` is missing or not array-like, NaN is assigned.
+    2) Drop the original `sigma_total_ENU` column.
+    3) If `full_output=False`, keep only a compact set of core columns for export.
 
     Parameters
     ----------
     df : pd.DataFrame
-    full_output : bool
-        If True, return all columns. If False (default), return core columns only.
+        Exposure table produced by the previous pipeline steps.
+    full_output : bool, default False
+        If True, return all columns (minus `sigma_total_ENU`).
+        If False, return only a predefined subset of core columns.
+
+    Returns
+    -------
+    pd.DataFrame
+        Formatted output table.
+
+    Raises
+    ------
+    KeyError
+        If `full_output=False` and any required core columns are missing in `df`.
     """
     # Split sigma_total_ENU -> sigma_E, sigma_N, sigma_U
     df['sigma_E'] = df['sigma_total_ENU'].apply(lambda x: x[0] if hasattr(x, '__len__') else np.nan)
