@@ -51,8 +51,7 @@ pip install -e .
 5. **Parse image metadata** - Extract capture time, gimbal attitude, and camera orientation from EXIF/XMP
 6. **Parse and interpolate MRK** - Convert gimbal offset vectors from NED → ENU → ECEF
 7. **Compute geotagged positions** - Match images to PPK solutions, apply MRK offset, propagate covariance
-8. **Transform coordinates** - Convert from ECEF to UTM or other target CRS
-9. **Export CSV** - Generate timestamped CSV with positions, attitudes, and uncertainties
+8. **Export CSV** - Generate timestamped CSV with positions, attitudes, and uncertainties
 
 ## Example Usage
 
