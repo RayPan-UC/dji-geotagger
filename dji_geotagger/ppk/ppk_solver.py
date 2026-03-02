@@ -114,8 +114,10 @@ def process_ppk(
         answer = input(f"[WARNING] {output_pos.name} already exists. Overwrite? (y/n): ").strip().lower()
         if answer != "y":
             print(f"[INFO] Skipping: {output_pos.name}")
-            return
-        
+            # .pos -> df
+            df = pos2df(pos_file=output_pos, base_error_propogation_on=base_error_propogation_on)
+            return df
+                
     cmd = [
         str(rnx2rtkp),
         "-k", str(conf_file),
@@ -136,7 +138,6 @@ def process_ppk(
 
     # .pos -> df
     df = pos2df(pos_file=output_pos, base_error_propogation_on=base_error_propogation_on)
-
     return df
 
 
