@@ -1,9 +1,11 @@
 from pathlib import Path
 import subprocess
+import pandas as pd
 from dji_geotagger.tools.install_RTKLIB import get_rtklib_executable
 from dji_geotagger.ppk.ephemeris_downloader import download_igs_data
 from dji_geotagger.ppk.PPP_sum_parser import sum_file_parser
 from dji_geotagger.config.import_config import override_rtklib_config
+from dji_geotagger.core.pos_parser import pos2df
 
 # for PPK process
 # We need:
@@ -15,13 +17,14 @@ from dji_geotagger.config.import_config import override_rtklib_config
 def process_ppk(
     base_obs: str,
     base_nav: str,
-    rover_dir: str,
+    rover_obs: str,
     sum_file_path: str = None,
     user_conf: dict = {},
     ephemeris_files: list[str] = None,
+    base_error_propogation_on: bool = True,
     output_dir: Path = None,
     RTKLIB: Path = None
-    ) -> list[Path]:
+    ) -> pd.DataFrame:
     """
     Batch process RTKLIB PPK solution for a directory of rover OBS files.
 
@@ -76,14 +79,14 @@ def process_ppk(
     # Check input
     base_obs = Path(base_obs)
     base_nav = Path(base_nav)
-    rover_dir = Path(rover_dir)
-    rover_obs_files = sorted(rover_dir.glob("*.obs"))
+    rover_obs = Path(rover_obs)
     ephemeris_files = [Path(p) for p in ephemeris_files] if ephemeris_files else None
+    base_error_propogation_on = base_error_propogation_on
     output_dir = Path(output_dir) if output_dir else Path.cwd() / "DGT_output" / "PPK_result"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Check files exist
-    for file in [base_obs, base_nav]:
+    for file in [base_obs, base_nav, rover_obs]:
         if file and not file.exists():
             raise FileNotFoundError(f"[ERROR] File not found: {file}")
 
@@ -92,8 +95,6 @@ def process_ppk(
             if not file.exists():
                 raise FileNotFoundError(f"[ERROR] Ephemeris file not found: {file}")
     
-    if len(rover_obs_files) == 0:
-        raise FileNotFoundError(f"[ERROR] Rover .obs file not found")
 
     # Check rnx2rtkp
     rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB)
@@ -107,42 +108,36 @@ def process_ppk(
     if not ephemeris_files:
         ephemeris_files = download_igs_data(base_obs_path=base_obs)   
     
-
     # start ppk
-    print(f"\n======= {len(rover_obs_files)} .obs files were found. Start PPK calculation now... =======")
-    ppk_results = []
-    for rover_obs in rover_obs_files:
-        output_pos = output_dir / f"{rover_obs.stem}.pos"
-        if output_pos.exists():
-            print(f"[WARNING] Output exists, skipping: {output_pos.name}")
-            ppk_results.append(output_pos) # skip and add result to list
-            continue
-        cmd = [
-            str(rnx2rtkp),
-            "-k", str(conf_file),
-            "-o", str(output_pos),
-            str(rover_obs),
-            str(base_obs),
-            str(base_nav),
-            *[str(f) for f in ephemeris_files],
-        ]
-
-        try:
-            print(f"[INFO] Solving: {rover_obs.name} ...")
-            subprocess.run(cmd, check=True)
-            ppk_results.append(output_pos)
-            print(f"[INFO] Finished: {output_pos.name}")
+    output_pos = output_dir / f"{rover_obs.stem}.pos"
+    if output_pos.exists():
+        answer = input(f"[WARNING] {output_pos.name} already exists. Overwrite? (y/n): ").strip().lower()
+        if answer != "y":
+            print(f"[INFO] Skipping: {output_pos.name}")
+            return
         
-        except subprocess.CalledProcessError:
-            print(f"[ERROR] Failed to process: {rover_obs.name}")
+    cmd = [
+        str(rnx2rtkp),
+        "-k", str(conf_file),
+        "-o", str(output_pos),
+        str(rover_obs),
+        str(base_obs),
+        str(base_nav),
+        *[str(f) for f in ephemeris_files],
+    ]
 
-    # Note for PPK
-    print("[NOTE] Although RTKLIB labels output coordinates as 'WGS84', the actual reference frame "
-        "is determined by the SP3/CLK products used. "
-        "(e.g., IGS FINAL products are referenced to IGS20, "
-        "which is consistent with ITRF2020 at the mm level.)")
+    try:
+        print(f"[INFO] Solving: {rover_obs.name} ...")
+        subprocess.run(cmd, check=True)
+        print(f"[INFO] Finished: {output_pos.name}")
+    
+    except subprocess.CalledProcessError:
+        print(f"[ERROR] Failed to process: {rover_obs.name}")
 
-    return ppk_results
+    # .pos -> df
+    df = pos2df(pos_file=output_pos, base_error_propogation_on=base_error_propogation_on)
+
+    return df
 
 
 def resolve_base_position(
@@ -200,3 +195,61 @@ def no_base_pos_warn():
               }
               process_ppk(..., user_conf=user_conf)
     """)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#############################
+"""
+batch process_ppk
+
+
+    # start ppk
+    print(f"\n======= {len(rover_obs_files)} .obs files were found. Start PPK calculation now... =======")
+    ppk_results = []
+    for rover_obs in rover_obs_files:
+        output_pos = output_dir / f"{rover_obs.stem}.pos"
+        if output_pos.exists():
+            print(f"[WARNING] Output exists, skipping: {output_pos.name}")
+            ppk_results.append(output_pos) # skip and add result to list
+            continue
+        cmd = [
+            str(rnx2rtkp),
+            "-k", str(conf_file),
+            "-o", str(output_pos),
+            str(rover_obs),
+            str(base_obs),
+            str(base_nav),
+            *[str(f) for f in ephemeris_files],
+        ]
+
+        try:
+            print(f"[INFO] Solving: {rover_obs.name} ...")
+            subprocess.run(cmd, check=True)
+            ppk_results.append(output_pos)
+            print(f"[INFO] Finished: {output_pos.name}")
+        
+        except subprocess.CalledProcessError:
+            print(f"[ERROR] Failed to process: {rover_obs.name}")
+
+    # Note for PPK
+    print("[NOTE] Although RTKLIB labels output coordinates as 'WGS84', the actual reference frame "
+        "is determined by the SP3/CLK products used. "
+        "(e.g., IGS FINAL products are referenced to IGS20, "
+        "which is consistent with ITRF2020 at the mm level.)")
+
+        """

@@ -1,86 +1,131 @@
-
-from numpy import radians
+import re
 import pandas as pd
 from pathlib import Path
-from dji_geotagger.tools.tools import vector_enu_to_ecef
+import pymap3d as pm
 
 
-
-def parse_mrk_line(line: str) -> dict | None:
+def mrk2df(mrk_file: str) -> pd.DataFrame:
     """
-    Parses a single line of a DJI .MRK file and returns a dictionary containing the gimbal correction in ECEF.
+    Parse a DJI .MRK file into a cleaned, geodetically consistent DataFrame.
 
-    Parameters:
-        line -- a string from the .MRK file (tab-delimited)
+    The .MRK file stores GNSS position and antenna-to-camera lever-arm offsets
+    recorded at each exposure epoch. This function performs:
 
-    Returns:
-        dict with:
-            - GPS_week: int
-            - GPS_time: float (seconds into GPS week)
-            - gimbal_dX, gimbal_dY, gimbal_dZ: float (ECEF correction in meters)
-        or None if line is header or invalid
+        1) Reading raw tab-separated MRK records
+        2) Cleaning string fields (removing suffix tags such as ",Lat", ",Lon")
+        3) Unit conversion (lever-arm offsets: millimetres → metres)
+        4) Converting lever-arm vectors from local NED to global ECEF
+        5) Mapping RTK quality flags to human-readable solution status
+
+    -------------------------------------------------------------------------
+    Raw .MRK Columns (DJI Standard Layout)
+    -------------------------------------------------------------------------
+    1   Sequence            : Image index
+    2   GPS Time (TOW)      : GPS time-of-week at exposure (seconds)
+    3   GPS Week            : GPS week number
+    4   North Offset (mm)   : Antenna phase center → CMOS center (North)
+    5   East Offset (mm)    : Antenna phase center → CMOS center (East)
+    6   Down Offset (mm)    : Antenna phase center → CMOS center (Down)
+    7   Latitude (deg)      : CMOS center latitude (may include suffix text)
+    8   Longitude (deg)     : CMOS center longitude (may include suffix text)
+    9   Ellipsoid Height    : Ellipsoidal height in metres (may include suffix)
+    10  StdDev N            : North position standard deviation (m)
+    11  StdDev E            : East position standard deviation (m)
+    12  StdDev D            : Down position standard deviation (m)
+    13  RTK Flag            : RTK solution quality indicator
+
+    -------------------------------------------------------------------------
+    Coordinate Frame Definition
+    -------------------------------------------------------------------------
+    Lever-arm offsets in DJI .MRK are expressed in a local NED frame:
+
+        N (North)  : positive toward geographic north
+        E (East)   : positive toward geographic east
+        D (Down)   : positive downward (opposite of Up)
+
+    This NED frame is a local tangent coordinate system whose orientation
+    depends on each epoch's geodetic latitude and longitude.
+
+    For integration with PPK outputs (typically provided in ECEF),
+    the lever-arm vectors (dN, dE, dD) are converted to ECEF components
+    (dX, dY, dZ) using the corresponding (lat, lon) per record.
+
+    This allows direct vector combination:
+
+        camera_center_ecef = antenna_ecef + leverarm_ecef
+
+    -------------------------------------------------------------------------
+    RTK Flag Mapping
+    -------------------------------------------------------------------------
+        0 or 16   → Single
+        34        → Float
+        50        → Fixed
+        otherwise → Unknown
+
+    -------------------------------------------------------------------------
+    Output DataFrame Columns
+    -------------------------------------------------------------------------
+    seq              : image sequence index
+    GPS_time         : GPS time-of-week (seconds)
+    GPS_week         : GPS week number (int)
+    lat, lon         : geodetic coordinates (degrees)
+    ellh             : ellipsoidal height (metres)
+    gimbal_dN/E/D    : lever-arm offsets in local NED frame (metres)
+    gimbal_dX/Y/Z    : lever-arm offsets in ECEF frame (metres)
+    rtk_status       : RTK solution type (Single / Float / Fixed / Unknown)
+
+    Notes
+    -----
+    - NED uses positive Down (not Up).
+    - ECEF conversion is performed per epoch.
+    - The function assumes WGS84-compatible geodetic coordinates.
+    - Any parsing failure raises RuntimeError.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cleaned MRK data ready for PPK interpolation and
+        camera center correction workflows.
     """
-    parts = line.strip().split('\t')
-    if len(parts) < 11:
-        return None
+    # Input
+    mrk_file = Path(mrk_file)
+
+    # Parse file
+    df = pd.read_csv(mrk_file, sep='\t', header=None)
+
+    # columns
+    df.columns = ['seq', 'GPS_time', 'GPS_week', 'gimbal_dN', 'gimbal_dE', 'gimbal_dD',
+                   'lat', 'lon', 'ellh', 'stddev', 'rtk_flag']
+
     try:
-        gps_time = float(parts[1])
-        gps_week = int(parts[2].strip('[]'))
-        dN =  float(parts[3].split(',')[0]) / 1000.0  # mm → m
-        dE =  float(parts[4].split(',')[0]) / 1000.0
-        dU = -float(parts[5].split(',')[0]) / 1000.0  # Down → Up (sign flipped)
-        lat = radians(float(parts[6].split(',')[0]))  # degrees → radians
-        lon = radians(float(parts[7].split(',')[0]))
+        # clean columns (strip, split, convert type)
+        df['GPS_week']  = df['GPS_week'].str.strip('[]').astype(int)
+        df['lat']       = df['lat'].str.strip().str.split(',').str[0].astype(float)
+        df['lon']       = df['lon'].str.strip().str.split(',').str[0].astype(float)
+        df['ellh']      = df['ellh'].str.strip().str.split(',').str[0].astype(float)
+        df['gimbal_dN'] = df['gimbal_dN'].str.strip().str.split(',').str[0].astype(int) * 0.001  # mm → m
+        df['gimbal_dE'] = df['gimbal_dE'].str.strip().str.split(',').str[0].astype(int) * 0.001  # mm → m
+        df['gimbal_dD'] = df['gimbal_dD'].str.strip().str.split(',').str[0].astype(int) * 0.001  # mm → m
+        df['rtk_flag']  = df['rtk_flag'].str.strip().str.split(',').str[0].astype(int)
 
-        dXYZ_ecef = vector_enu_to_ecef(lat, lon, dE, dN, dU)
+        # level arm -> ECEF
+        df['gimbal_dX'], df['gimbal_dY'], df['gimbal_dZ'] = pm.ned2ecef(
+            n    = df['gimbal_dN'].values,
+            e    = df['gimbal_dE'].values,
+            d    = df['gimbal_dD'].values, 
+            lat0 = df['lat'].values,
+            lon0 = df['lon'].values,
+            h0   = df['ellh'].values
+        )
 
-        return {
-            "GPS_week": gps_week,
-            "GPS_time": gps_time,
-            "gimbal_dE": dE,
-            "gimbal_dN": dN,
-            "gimbal_dU": dU,
-            "gimbal_dX": dXYZ_ecef[0, 0],
-            "gimbal_dY": dXYZ_ecef[1, 0],
-            "gimbal_dZ": dXYZ_ecef[2, 0]
-        }
+        # map RTK flag to status 
+        rtk_map = {0: 'Single', 16: 'Single', 34: 'Float', 50: 'Fixed'}
+        df['rtk_status'] = df['rtk_flag'].map(rtk_map).fillna('Unknown')
+        df = df.drop(columns=['rtk_flag'])
+        
 
-    except Exception:
-        return None
+    except Exception as e:
+        raise RuntimeError(f"[ERROR] Failed to parse .MRK file: {mrk_file}. {e}")
     
-    
-def combine_all_mrk(mrk_folder: Path) -> pd.DataFrame:
-    """
-    Reads all DJI .MRK files in a folder (recursively), parses them, and merges into a single DataFrame.
-
-    Parameters:
-        mrk_folder -- Path object pointing to the folder containing .MRK files
-
-    Returns:
-        DataFrame with columns:
-            - GPS_week
-            - GPS_time
-            (In ENU system)
-            - gimbal_dE
-            - gimbal_dN
-            - gimbal_dU
-            (In ECEF/ITRF system)
-            - gimbal_dX
-            - gimbal_dY
-            - gimbal_dZ
-    """
-
-    print(f"[INFO] Searching for .mrk files in: {mrk_folder}")
-    all_mrk_files = list(mrk_folder.rglob("*.mrk"))
-    all_records = []
-
-    for mrk_file in all_mrk_files:
-        with open(mrk_file, "r") as f:
-            for line in f:
-                parsed = parse_mrk_line(line)
-                if parsed:
-                    all_records.append(parsed)
-
-    df = pd.DataFrame(all_records)
-    print(f"[INFO] Parsed {len(all_mrk_files)} .MRK files, total {len(df)} records.")
+    print(f"[INFO] Parsed {mrk_file.stem}.mrk ({len(df)} records)")
     return df

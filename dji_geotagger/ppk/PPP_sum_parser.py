@@ -6,7 +6,8 @@ from dji_geotagger.tools.tools import ECEF2ENU
 
 def sum_file_parser(
         base_obs: Path = None,
-        sum_file_path: str = None):
+        sum_file_path: str = None,
+        print_report: bool = False):
     """
     Parse CSRS-PPP .sum file to extract final estimated ECEF position and covariance matrix.
 
@@ -16,6 +17,7 @@ def sum_file_parser(
     * The difference is at the sub-millimeter level. Both are absolutely reliable.
 
     Parameters:
+        base_obs : path to base's .obs file
         sum_file_path : path to .sum file
 
     Returns:
@@ -32,13 +34,17 @@ def sum_file_parser(
     # Check exist
     if sum_file_path:
         sum_file_path = Path(sum_file_path)
+        if not sum_file_path.exists():
+            raise FileNotFoundError(f"[ERROR] PPP summary file (.sum) not found: {sum_file_path}")
     elif base_obs:
-        sum_file_path = Path.cwd() / "DGT_output" / "RINEX" / "base" / "PPP" / f"{base_obs.stem}.sum"    
+        matches = list(base_obs.parent.glob(f"{base_obs.stem}.sum"))
+        if matches:
+            sum_file_path = matches[0]
+            print(f"[INFO] Auto-detected PPP summary file: {sum_file_path}")
+        else:
+            raise FileNotFoundError(f"[ERROR] No .sum file found for: {base_obs.stem}")
     else:
         raise ValueError("[ERROR] Must provide either base_obs or sum_file_path")
-
-    if sum_file_path and not sum_file_path.exists():
-            raise FileNotFoundError(f"[ERROR] PPP summary file (.sum) not found: {sum_file_path}")
     
     # Placeholders
     est_X = est_Y = est_Z = None
@@ -87,7 +93,7 @@ def sum_file_parser(
                 hgt = float(parts[5])
 
     # Check all parsed
-    if None in (est_X, est_Y, est_Z, sigma_X, sigma_Y, sigma_Z, rho_XY, rho_XZ, rho_YZ, coord_sys):
+    if None in (est_X, est_Y, est_Z, sigma_X, sigma_Y, sigma_Z, rho_XY, rho_XZ, rho_YZ, lat_dd, lon_dd, hgt, coord_sys):
         raise ValueError("[WARNING] Some POS entries missing or could not be parsed")
 
     # Covariance Matrix Calculation
@@ -106,11 +112,12 @@ def sum_file_parser(
     PPP_sigma_ENU = np.sqrt(np.diag(cov_PPP_ENU))
 
     # Summary
-    print(f"[INFO] Coord system : {coord_sys}")
-    print(f"[INFO] Base ECEF    : ({est_X:.4f}, {est_Y:.4f}, {est_Z:.4f}) m")
-    print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
-    print(f"[INFO] Base 1σ ENU  : E={PPP_sigma_ENU[0]*100:.2f} cm, N={PPP_sigma_ENU[1]*100:.2f} cm, U={PPP_sigma_ENU[2]*100:.2f} cm")
-    print(f"[INFO] Base 1σ ECEF : X={PPP_sigma_ECEF[0]*100:.2f} cm, Y={PPP_sigma_ECEF[1]*100:.2f} cm, Z={PPP_sigma_ECEF[2]*100:.2f} cm")
+    if print_report:
+        print(f"[INFO] Coord system : {coord_sys}")
+        print(f"[INFO] Base ECEF    : ({est_X:.4f}, {est_Y:.4f}, {est_Z:.4f}) m")
+        print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
+        print(f"[INFO] Base 1σ ENU  : E={PPP_sigma_ENU[0]*100:.2f} cm, N={PPP_sigma_ENU[1]*100:.2f} cm, U={PPP_sigma_ENU[2]*100:.2f} cm")
+        print(f"[INFO] Base 1σ ECEF : X={PPP_sigma_ECEF[0]*100:.2f} cm, Y={PPP_sigma_ECEF[1]*100:.2f} cm, Z={PPP_sigma_ECEF[2]*100:.2f} cm")
 
     return {
         "coord_sys": coord_sys,

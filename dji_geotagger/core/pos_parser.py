@@ -9,9 +9,6 @@ from dji_geotagger.tools.tools import ECEF2ENU
 import pymap3d as pm
 
 
-    
-
-
 def pos_cov_wrapper(sdx, sdy, sdz, sdxy, sdyz, sdzx) -> np.ndarray:
     """
     Reconstruct a 3x3 ECEF covariance matrix from RTKLIB .pos output fields.
@@ -50,9 +47,11 @@ def pos_cov_wrapper(sdx, sdy, sdz, sdxy, sdyz, sdzx) -> np.ndarray:
         [sdzx * abs(sdzx),  sdyz * abs(sdyz),           sdz**2]
     ])
 
-def parse_pos(
+def pos2df(
     pos_file: str,
-    cov_PPP_ECEF: np.ndarray = None
+    base_obs: str = None,
+    sum_file_path: str = None,
+    base_error_propogation_on: bool = True
     ) -> pd.DataFrame:
     """
     Parse a single RTKLIB .pos file into a DataFrame with coordinates and covariance matrices.
@@ -71,10 +70,17 @@ def parse_pos(
     Parameters:
     pos_file : str or Path
         Path to the RTKLIB .pos output file.
-    cov_PPP_ECEF : np.ndarray, optional
-        3x3 PPP base station covariance matrix in ECEF (m²).
-        If provided, added to each epoch's covariance for full error propagation.
-        If None, only PPK relative covariance is used.
+    base_obs : str or Path, optional
+        Path to base station .obs file. Used to auto-locate the corresponding
+        .sum file under DGT_output/RINEX/base/PPP/<stem>.sum.
+        Ignored if sum_file_path is provided.
+    sum_file_path : str or Path, optional
+        Direct path to CSRS-PPP .sum file for base station covariance.
+        Takes priority over base_obs.
+    base_error_propagation_on : bool, optional
+        If True (default), loads PPP base covariance and adds it to each
+        epoch's covariance (cov_total = cov_PPK + cov_PPP).
+        If False, only PPK relative covariance is used.
 
     Returns:
     pd.DataFrame
@@ -90,8 +96,16 @@ def parse_pos(
     """
     # Input
     pos_file = Path(pos_file)
+    if not pos_file.exists():
+        raise FileNotFoundError(f"[ERROR] File not found: {pos_file}")  
+
+    cov_PPP_ECEF = None
+    if base_error_propogation_on:
+        PPP_dict = sum_file_parser(base_obs, sum_file_path)
+        cov_PPP_ECEF = PPP_dict.get("cov_PPP_ECEF")
 
     # Check pos file validation (exist/ECEF/GPST/deciminal>=6)
+    validate_pos_file(pos_file)
 
     # Parse file
     with open(pos_file) as f:
@@ -159,11 +173,81 @@ def parse_pos(
     print(f"[INFO] Parsed {pos_file.stem}.pos ({len(df)} records)")
     return df
 
+def validate_pos_file(pos_file: Path, min_gpst_decimals: int = 6) -> None:
+    """
+    Validate RTKLIB .pos file:
+    - has GPST header
+    - has ECEF header (x-ecef)
+    - has at least one data record
+    - GPST decimal seconds precision >= min_gpst_decimals
+    """
+    pos_file = Path(pos_file)
+    if not pos_file.exists():
+        raise FileNotFoundError(f"[ERROR] File not found: {pos_file}")
+
+    has_gpst_header = False
+    has_ecef_header = False
+    data_line_found = False
+    gpst_precision_checked = False
+
+    with pos_file.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.rstrip("\n")
+
+            # Header lines
+            if line.startswith("%"):
+                if "GPST" in line:
+                    has_gpst_header = True
+                if "x-ecef" in line.lower():
+                    has_ecef_header = True
+                continue
+
+            # Skip empty lines
+            if not line.strip():
+                continue
+
+            # Data line
+            parts = line.split()
+            if len(parts) < 5:
+                # Typically: date time x y z ... ; if too short, skip
+                continue
+
+            # Check GPST precision from HH:MM:SS.ssssss (parts[1])
+            time_str = parts[1]
+            if "." not in time_str:
+                raise ValueError("[ERROR] GPST has no fractional seconds (no '.').")
+
+            sec_fraction = time_str.split(".", 1)[1]
+            if len(sec_fraction) < min_gpst_decimals:
+                raise ValueError(
+                    f"[ERROR] GPST precision must be >= {min_gpst_decimals} decimal places."
+                )
+
+            gpst_precision_checked = True
+
+            # (Optional but recommended) Ensure ECEF columns are numeric
+            # parts[2], parts[3], parts[4] should be x, y, z for x-ecef format
+            try:
+                float(parts[2]); float(parts[3]); float(parts[4])
+            except ValueError:
+                # Not a valid numeric row (could be malformed)
+                continue
+
+            data_line_found = True
+            break  # one valid record is enough
+
+    # Final validation checks (MUST be after reading)
+    if not has_gpst_header:
+        raise ValueError("[ERROR] POS file is not in GPST format (header missing).")
+    if not has_ecef_header:
+        raise ValueError("[ERROR] POS file is not ECEF solution (x-ecef missing).")
+    if not gpst_precision_checked:
+        raise ValueError("[ERROR] No GPST data lines found to check precision.")
+    if not data_line_found:
+        raise ValueError("[ERROR] No valid ECEF data records found in POS file.")
+
 def pos_df_merger(
-        pos_files: list[Path],
-        base_obs: str = None,
-        sum_file_path: str = None,
-        base_error_propogation_on: bool = True,
+        ppk_dfs: list[pd.DataFrame]
     ):
     """
     Parse and merge multiple RTKLIB .pos files into a single time-sorted DataFrame.
@@ -174,44 +258,15 @@ def pos_df_merger(
     Parameters:
     pos_files : list of Path
         List of .pos file paths to parse and merge.
-    base_obs : str or Path, optional
-        Path to base station .obs file. Used to auto-locate the corresponding
-        .sum file under DGT_output/RINEX/base/PPP/<stem>.sum.
-        Ignored if sum_file_path is provided.
-    sum_file_path : str or Path, optional
-        Direct path to CSRS-PPP .sum file for base station covariance.
-        Takes priority over base_obs.
-    base_error_propagation_on : bool, optional
-        If True (default), loads PPP base covariance and adds it to each
-        epoch's covariance (cov_total = cov_PPK + cov_PPP).
-        If False, only PPK relative covariance is used.
+
 
     Returns:
     pd.DataFrame
         Merged DataFrame sorted by GPS_week and GPS_time with duplicates removed.
         Columns are identical to parse_pos() output.
     """
-    # Input Validation
-    if not pos_files:
-        raise RuntimeError("[ERROR] No .pos files provided.")  
-
-    cov_PPP_ECEF = None
-    if base_error_propogation_on:
-        PPP_dict = sum_file_parser(base_obs, sum_file_path)
-        cov_PPP_ECEF = PPP_dict.get("cov_PPP_ECEF")
     
-    
-    # Merge all pos file as df
-    print(f"\n======= Merging {len(pos_files)} .pos files to dataframe =======")
-    ppk_dfs = []
-    for pos in pos_files:
-        try:
-            df = parse_pos(pos, cov_PPP_ECEF=cov_PPP_ECEF)
-            ppk_dfs.append(df)
-        except Exception as e:
-            print(f"[ERROR] Failed to parse {pos.name} → {e}")
-            continue
-
+    # Merge all pos df
     if not ppk_dfs:
         raise RuntimeError("[ERROR] All .pos files failed to parse.")
     

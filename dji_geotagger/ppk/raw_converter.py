@@ -53,6 +53,7 @@ def raw2rinex(
                 "[ERROR] `appr_time` must be in format YYYYMMDD HHMM"
             )
     else:
+        dt = None
         # parse from filename tokens
         for token in input_path.stem.split("_"):
             if token.isdigit() and len(token) == 14:
@@ -88,6 +89,12 @@ def raw2rinex(
     obs_path = rinex_dir / f"{file_name}.obs"
     nav_path = rinex_dir / f"{file_name}.nav"
 
+    # Skip if exist
+    if obs_path.exists() and nav_path.exists():
+        print(f"[WARNING] Output exists, skipping: {input_path}")
+        return obs_path, nav_path
+            
+
     # Convert
     cmd = [
         str(convbin),
@@ -114,7 +121,6 @@ def raw2rinex(
     
     if type_dir == "base":
         PPP_help(obs_path)
-        create_PPP_folder_structure(base_out)
     
 
     return obs_path, nav_path
@@ -176,7 +182,8 @@ def PPP_help(obs_path:Path):
             1. Upload your .obs file
             2. Enter your email address
             3. Download the result file when processing completes 
-            4. Place the PPP result file in PPP folder for PPK process
+            4. Place the PPP summary file with your .obs file
+            5. Continue processing with DJI-Geotagger.
 
         - Recommended options:
                 1. Positioning mode: Static
@@ -186,42 +193,4 @@ def PPP_help(obs_path:Path):
         
         Processing takes ~5–30 minutes depending on data length.
             """)
-
-
-def create_PPP_folder_structure(base_out: Path):
-    """
-    Create PPP folder structure for a specific dataset.
-
-    DGT_output/
-        PPP/
-            README.txt
-            <file_name>/
-                (user drops PPP result here)
-    """
-
-
-    # Create PPP project folder
-    ppp_root = base_out / "DGT_output" / "RINEX" / "base" / "PPP"
-    ppp_root.mkdir(parents=True, exist_ok=True)
-
-    # Create instruction file INSIDE project folder
-    instruction_file = ppp_root / "README.txt"
-
-    if not instruction_file.exists():
-        instruction_file.write_text(
-            "DJI-Geotagger PPP Processing Folder\n"
-            "====================================\n\n"
-            "Step 1: Upload the RINEX (.obs) file to CSRS-PPP\n"
-            "Website:\n"
-            "https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php\n\n"
-            "Recommended settings:\n"
-            "  - Positioning Mode: Static\n"
-            "  - Coordinate System: ITRF\n\n"
-            "Step 2: Download the PPP result file (.pos / .sum / .csv)\n"
-            "Step 3: Place the PPP result file in THIS folder\n\n"
-            "After that, continue processing with DJI-Geotagger.\n",
-            encoding="utf-8"
-        )
-
-    print(f"[HINT] Please place the PPP result (.sum) in {ppp_root}")
 
