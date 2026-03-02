@@ -115,7 +115,7 @@ def process_ppk(
         if answer != "y":
             print(f"[INFO] Skipping: {output_pos.name}")
             # .pos -> df
-            df = pos2df(pos_file=output_pos, base_error_propogation_on=base_error_propogation_on)
+            df = pos2df(pos_file=output_pos, base_obs=base_obs, base_error_propogation_on=base_error_propogation_on)
             return df
                 
     cmd = [
@@ -137,7 +137,7 @@ def process_ppk(
         print(f"[ERROR] Failed to process: {rover_obs.name}")
 
     # .pos -> df
-    df = pos2df(pos_file=output_pos, base_error_propogation_on=base_error_propogation_on)
+    df = pos2df(pos_file=output_pos, base_obs=base_obs, base_error_propogation_on=base_error_propogation_on)
     return df
 
 

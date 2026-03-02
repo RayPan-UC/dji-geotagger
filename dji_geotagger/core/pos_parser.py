@@ -5,7 +5,7 @@ import numpy as np
 from numpy import sign
 from tqdm import tqdm
 from dji_geotagger.ppk.PPP_sum_parser import sum_file_parser
-from dji_geotagger.tools.tools import ECEF2ENU
+from dji_geotagger.tools.tools import ECEF2ENU_vec
 import pymap3d as pm
 
 
@@ -130,12 +130,12 @@ def pos2df(
             x = float(parts[2])
             y = float(parts[3])
             z = float(parts[4])
-            sdx  = float(parts[8])
-            sdy  = float(parts[9])
-            sdz  = float(parts[10])
-            sdxy = float(parts[11])
-            sdyz = float(parts[12])
-            sdzx = float(parts[13])
+            sdx  = float(parts[7])
+            sdy  = float(parts[8])
+            sdz  = float(parts[9])
+            sdxy = float(parts[10])
+            sdyz = float(parts[11])
+            sdzx = float(parts[12])
 
             # Covariance (if PPP cov provide, conduct error propogation)
             cov_PPK_ECEF = pos_cov_wrapper(sdx, sdy, sdz, sdxy, sdyz, sdzx) # Construct covariance matrix
@@ -143,11 +143,12 @@ def pos2df(
 
             # ECEF -> LLA (WGS84)
             lat_dd, lon_dd, hgt = pm.ecef2geodetic(x, y, z) # Coordinates
-            cov_total_ENU = ECEF2ENU(cov_total_ECEF, lon_deg=lon_dd, lat_deg=lat_dd) # Covariance
+            cov_total_ENU = ECEF2ENU_vec(cov_total_ECEF, lon_deg=lon_dd, lat_deg=lat_dd) # Covariance
 
             # sigma
             sigma_total_ECEF = np.sqrt(np.diag(cov_total_ECEF)) # 1-sigma in ECEF (m)
             sigma_total_ENU = np.sqrt(np.diag(cov_total_ENU)) # 1-sigma in ENU (m)
+
             # Save as dict in list
             records.append({
                     "GPS_week": gps_week,

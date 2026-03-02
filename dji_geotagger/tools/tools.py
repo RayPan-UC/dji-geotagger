@@ -6,7 +6,7 @@ import numpy as np
 from numpy import sin, cos
 from astropy.time import Time
 
-def ECEF2ENU(
+def ECEF2ENU_vec(
         cov_ecef: np.ndarray, 
         lon_deg: float, 
         lat_deg: float
@@ -21,7 +21,22 @@ def ECEF2ENU(
     ])
     return R @ cov_ecef @ R.T
 
+def NED2ECEF_vec(dN, dE, dD, lat_deg, lon_deg):
+    """
+    Convert a vector from local NED frame to ECEF frame (vector only, no translation).
+    Assumes NED with D = Down (positive downward).
+    """
+    lat = np.radians(lat_deg)
+    lon = np.radians(lon_deg)
 
+    R = np.array([
+        [-np.sin(lat)*np.cos(lon), -np.sin(lon), -np.cos(lat)*np.cos(lon)],
+        [-np.sin(lat)*np.sin(lon),  np.cos(lon), -np.cos(lat)*np.sin(lon)],
+        [ np.cos(lat),              0.0,         -np.sin(lat)],
+    ], dtype=float)
+
+    vec_ned = np.array([dN, dE, dD], dtype=float)
+    return R @ vec_ned
 
 def utc2gps(dt_obj: dt.datetime):
     """
@@ -55,30 +70,35 @@ def utc2gps(dt_obj: dt.datetime):
     "gps_day":  gps_day,
     "gps_tow":  gps_tow,
     }
-
-##################################################################################
-def vector_enu_to_ecef(lat: float, lon: float, dE: float, dN: float, dU: float) -> np.ndarray:
+    
+def vector_enu2ecef(lat_dd: float, lon_dd: float, dE: float, dN: float, dU: float) -> np.ndarray:
     """
     Converts a local correction vector from ENU (East-North-Up) to ECEF (Earth-Centered, Earth-Fixed).
 
     Parameters:
-        lat -- geodetic latitude in radians
-        lon -- geodetic longitude in radians
-        dE  -- correction in East direction (meters)
-        dN  -- correction in North direction (meters)
-        dU  -- correction in Up direction (meters)
+        lat -- geodetic latitude in degree
+        lon -- geodetic longitude in degree
+        dE  -- correction in East direction (metres)
+        dN  -- correction in North direction (metres)
+        dU  -- correction in Up direction (metres)
 
     Returns:
         (3, 1) numpy array -- correction vector in ECEF coordinates (ΔX, ΔY, ΔZ)
     """
+    lat = np.radians(lat_dd)
+    lon = np.radians(lon_dd)
+
     R = np.array([
-        [-sin(lon),              cos(lon),             0],
+        [         -sin(lon),           cos(lon),         0],
         [-sin(lat)*cos(lon), -sin(lat)*sin(lon),  cos(lat)],
         [ cos(lat)*cos(lon),  cos(lat)*sin(lon),  sin(lat)]
     ])
     enu_vector = np.array([[dE], [dN], [dU]])
     ecef_vector = R.T @ enu_vector
     return ecef_vector
+
+##################################################################################
+
 
 
 

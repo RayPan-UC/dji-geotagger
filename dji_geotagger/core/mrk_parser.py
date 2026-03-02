@@ -1,7 +1,7 @@
-import re
 import pandas as pd
+import numpy as np
 from pathlib import Path
-import pymap3d as pm
+from dji_geotagger.tools.tools import NED2ECEF_vec
 
 
 def mrk2df(mrk_file: str) -> pd.DataFrame:
@@ -109,14 +109,14 @@ def mrk2df(mrk_file: str) -> pd.DataFrame:
         df['rtk_flag']  = df['rtk_flag'].str.strip().str.split(',').str[0].astype(int)
 
         # level arm -> ECEF
-        df['gimbal_dX'], df['gimbal_dY'], df['gimbal_dZ'] = pm.ned2ecef(
-            n    = df['gimbal_dN'].values,
-            e    = df['gimbal_dE'].values,
-            d    = df['gimbal_dD'].values, 
-            lat0 = df['lat'].values,
-            lon0 = df['lon'].values,
-            h0   = df['ellh'].values
-        )
+        ecef_vecs = np.array([
+            NED2ECEF_vec(row.gimbal_dN, row.gimbal_dE, row.gimbal_dD, row.lat, row.lon)
+            for _, row in df.iterrows()
+        ])
+
+        df['gimbal_dX'] = ecef_vecs[:, 0]
+        df['gimbal_dY'] = ecef_vecs[:, 1]
+        df['gimbal_dZ'] = ecef_vecs[:, 2]
 
         # map RTK flag to status 
         rtk_map = {0: 'Single', 16: 'Single', 34: 'Float', 50: 'Fixed'}

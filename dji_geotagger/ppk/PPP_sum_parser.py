@@ -1,7 +1,7 @@
 
 from pathlib import Path
 import numpy as np
-from dji_geotagger.tools.tools import ECEF2ENU
+from dji_geotagger.tools.tools import ECEF2ENU_vec
 
 
 def sum_file_parser(
@@ -108,7 +108,7 @@ def sum_file_parser(
     # Covariance Matrix (ECEF)
     cov_PPP_ECEF = np.diag(PPP_sigma_ECEF) @ corr @ np.diag(PPP_sigma_ECEF)
     # Covariance Matrix (ENU)
-    cov_PPP_ENU = ECEF2ENU(cov_ecef=cov_PPP_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
+    cov_PPP_ENU = ECEF2ENU_vec(cov_ecef=cov_PPP_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
     PPP_sigma_ENU = np.sqrt(np.diag(cov_PPP_ENU))
 
     # Summary
