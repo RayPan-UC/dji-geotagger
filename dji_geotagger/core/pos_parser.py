@@ -103,6 +103,7 @@ def pos2df(
     if base_error_propogation_on:
         PPP_dict = sum_file_parser(base_obs, sum_file_path)
         cov_PPP_ECEF = PPP_dict.get("cov_PPP_ECEF")
+        coord_sys =  PPP_dict.get("coord_sys")
 
     # Check pos file validation (exist/ECEF/GPST/deciminal>=6)
     validate_pos_file(pos_file)
@@ -153,6 +154,7 @@ def pos2df(
             records.append({
                     "GPS_week": gps_week,
                     "GPS_time": gps_tow,
+                    "coord_sys": coord_sys,
                     "X": x,
                     "Y": y,
                     "Z": z,
