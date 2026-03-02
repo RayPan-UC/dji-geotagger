@@ -110,34 +110,41 @@ def process_ppk(
     
     # start ppk
     output_pos = output_dir / f"{rover_obs.stem}.pos"
-    if output_pos.exists():
-        answer = input(f"[WARNING] {output_pos.name} already exists. Overwrite? (y/n): ").strip().lower()
-        if answer != "y":
-            print(f"[INFO] Skipping: {output_pos.name}")
-            # .pos -> df
-            df = pos2df(pos_file=output_pos, base_obs=base_obs, base_error_propogation_on=base_error_propogation_on)
-            return df
-                
-    cmd = [
-        str(rnx2rtkp),
-        "-k", str(conf_file),
-        "-o", str(output_pos),
-        str(rover_obs),
-        str(base_obs),
-        str(base_nav),
-        *[str(f) for f in ephemeris_files],
-    ]
 
-    try:
-        print(f"[INFO] Solving: {rover_obs.name} ...")
-        subprocess.run(cmd, check=True)
-        print(f"[INFO] Finished: {output_pos.name}")
-    
-    except subprocess.CalledProcessError:
-        print(f"[ERROR] Failed to process: {rover_obs.name}")
+    need_solve = True
+    if output_pos.exists():
+        answer = input(
+            f"[WARNING] {output_pos.name} already exists. Overwrite? (y/n): "
+        ).strip().lower()
+        need_solve = (answer == "y")
+        if not need_solve:
+            print(f"[INFO] Using existing: {output_pos.name}")
+
+    if need_solve:
+        cmd = [
+            str(rnx2rtkp),
+            "-k", str(conf_file),
+            "-o", str(output_pos),
+            str(rover_obs),
+            str(base_obs),
+            str(base_nav),
+            *[str(f) for f in ephemeris_files],
+        ]
+
+        try:
+            print(f"[INFO] Solving: {rover_obs.name} ...")
+            subprocess.run(cmd, check=True)
+            print(f"[INFO] Finished: {output_pos.name}")
+        
+        except subprocess.CalledProcessError:
+            raise RuntimeError(f"[ERROR] Failed to process: {rover_obs.name}")
 
     # .pos -> df
-    df = pos2df(pos_file=output_pos, base_obs=base_obs, base_error_propogation_on=base_error_propogation_on)
+    df = pos2df(
+            pos_file=output_pos, 
+            base_obs=base_obs, 
+            sum_file_path=sum_file_path,
+            base_error_propogation_on=base_error_propogation_on)
     return df
 
 

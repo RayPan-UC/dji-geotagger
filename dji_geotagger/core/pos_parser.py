@@ -101,7 +101,7 @@ def pos2df(
 
     cov_PPP_ECEF = None
     if base_error_propogation_on:
-        PPP_dict = sum_file_parser(base_obs, sum_file_path)
+        PPP_dict = sum_file_parser(base_obs=base_obs, sum_file_path=sum_file_path)
         cov_PPP_ECEF = PPP_dict.get("cov_PPP_ECEF")
         coord_sys =  PPP_dict.get("coord_sys")
 

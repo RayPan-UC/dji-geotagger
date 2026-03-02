@@ -3,9 +3,61 @@ from pathlib import Path
 import numpy as np
 from dji_geotagger.tools.tools import ECEF2ENU_vec
 
+def resolve_ppp_sum_file(
+    base_obs: str | None = None,
+    sum_file_path: str | None = None,
+) -> Path:
+    """
+    Resolve PPP summary (.sum) file path.
+
+    Priority:
+        1. If user explicitly provides sum_file_path → use it.
+        2. Otherwise, try auto-detect from base_obs directory.
+        3. Raise error if neither works.
+    """
+
+    if base_obs is not None:
+        base_obs = Path(base_obs)
+
+    if sum_file_path is not None:
+        sum_file_path = Path(sum_file_path)
+
+    # 1. User explicitly provided path → highest priority
+    if sum_file_path is not None:
+        sum_file_path = Path(sum_file_path)
+
+        if not sum_file_path.exists():
+            raise FileNotFoundError(
+                f"[ERROR] PPP summary file (.sum) not found: {sum_file_path}"
+            )
+
+        if base_obs is not None:
+            print("[INFO] Both base_obs and sum_file_path provided. "
+                  f"Using user-specified .sum file. {sum_file_path}")
+
+        return sum_file_path
+
+    # 2. Auto-detect from base_obs
+    if base_obs is not None:
+        base_obs = Path(base_obs)
+        matches = list(base_obs.parent.glob(f"{base_obs.stem}.sum"))
+
+        if matches:
+            print(f"[INFO] Auto-detected PPP summary file: {matches[0]}")
+            return matches[0]
+
+        raise FileNotFoundError(
+            f"[ERROR] No .sum file found for base: {base_obs.stem}"
+        )
+
+    # 3. Nothing provided
+    raise ValueError(
+        "[ERROR] Must provide either sum_file_path or base_obs"
+    )
+
 
 def sum_file_parser(
-        base_obs: Path = None,
+        base_obs: str = None,
         sum_file_path: str = None,
         print_report: bool = False):
     """
@@ -32,19 +84,7 @@ def sum_file_parser(
     """
 
     # Check exist
-    if sum_file_path:
-        sum_file_path = Path(sum_file_path)
-        if not sum_file_path.exists():
-            raise FileNotFoundError(f"[ERROR] PPP summary file (.sum) not found: {sum_file_path}")
-    elif base_obs:
-        matches = list(base_obs.parent.glob(f"{base_obs.stem}.sum"))
-        if matches:
-            sum_file_path = matches[0]
-            print(f"[INFO] Auto-detected PPP summary file: {sum_file_path}")
-        else:
-            raise FileNotFoundError(f"[ERROR] No .sum file found for: {base_obs.stem}")
-    else:
-        raise ValueError("[ERROR] Must provide either base_obs or sum_file_path")
+    sum_file_path = resolve_ppp_sum_file(base_obs, sum_file_path)
     
     # Placeholders
     est_X = est_Y = est_Z = None
