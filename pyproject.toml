@@ -28,7 +28,7 @@ classifiers = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/RayPan-UC/dji-geotagger"
+"Homepage" = "https://github.com/geo-raypan/dji-geotagger"
 
 [build-system]
 requires = ["setuptools", "wheel"]

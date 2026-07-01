@@ -23,7 +23,7 @@ pip install dji-geotagger
 
 Or from source:
 ```bash
-git clone https://github.com/RayPan-UC/dji-geotagger.git
+git clone https://github.com/geo-raypan/dji-geotagger.git
 cd dji-geotagger
 pip install -e .
 ```
@@ -348,6 +348,32 @@ The **camera center position** (`cam_X/Y/Z`, `cam_lat/lon/h`) is the final geota
 1. Interpolating PPK solution to exposure time
 2. Applying gimbal offset correction (NED → ECEF)
 3. Propagating full covariance through transformations
+
+## Covariance / Uncertainty Model
+
+The reported per-image uncertainty (`sigma_E/N/U`, `cov_total_ECEF`) combines **two independent
+error sources as full 3×3 covariance matrices in ECEF**, then rotates the result into the local
+ENU frame:
+
+- **PPK (rover relative)** — per-epoch positioning precision from the RTKLIB `.pos` solution.
+- **PPP (base absolute)** — base station precision from the CSRS-PPP `.sum` file.
+
+Working at the covariance-matrix level (rather than adding scalar variances) preserves the
+inter-axis correlations. Disable the base term with `base_error_propagation_on=False` to report
+rover-only precision.
+
+### ⚠️ The reported sigma is slightly optimistic
+
+It accounts for **PPK + PPP only**, so treat it as a lower bound on the true uncertainty. A few
+real error sources are **not** propagated into the reported values:
+
+- **Linear interpolation** — the PPK trajectory is interpolated linearly to each exposure time, and
+  covariance is copied from the nearest epoch. Any acceleration between GNSS epochs adds a small
+  error (near zero on straight lines, up to a few cm during turns/speed changes, growing with
+  flight speed).
+- **Exposure time-sync** — a small camera/GNSS clock offset shifts the position by roughly
+  speed × offset.
+- **Lever-arm / gimbal** — the MRK offset vector is applied as if error-free.
 
 ## Key Functions
 
