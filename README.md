@@ -355,8 +355,11 @@ The reported per-image uncertainty (`sigma_E/N/U`, `cov_total_ECEF`) combines **
 error sources as full 3×3 covariance matrices in ECEF**, then rotates the result into the local
 ENU frame:
 
-- **PPK (rover relative)** — per-epoch positioning precision from the RTKLIB `.pos` solution.
-- **PPP (base absolute)** — base station precision from the CSRS-PPP `.sum` file.
+$$\Sigma_{\text{total}} = \Sigma_{\text{PPK}} + \Sigma_{\text{PPP}}, \qquad \Sigma_{\text{ENU}} = R\,\Sigma_{\text{total}}\,R^{\top}$$
+
+- **PPK (rover relative)** — $\Sigma_{\text{PPK}}$, per-epoch positioning precision from the RTKLIB `.pos` solution.
+- **PPP (base absolute)** — $\Sigma_{\text{PPP}}$, base station precision from the CSRS-PPP `.sum` file.
+- $R$ — the ECEF → ENU rotation (Jacobian) at the epoch's latitude/longitude.
 
 Working at the covariance-matrix level (rather than adding scalar variances) preserves the
 inter-axis correlations. Disable the base term with `base_error_propagation_on=False` to report
