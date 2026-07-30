@@ -35,7 +35,8 @@ def pos2df(
     pos_file: str,
     base_obs: str = None,
     sum_file_path: str = None,
-    base_error_propagation_on: bool = True
+    base_error_propagation_on: bool = True,
+    base_position: dict = None
     ) -> pd.DataFrame:
     """
     Parse a single RTKLIB .pos file (ECEF solution) into a DataFrame with coordinates and covariance.
@@ -67,6 +68,11 @@ def pos2df(
     base_error_propagation_on : bool, default True
         If True, add PPP base covariance to rover covariance per epoch.
         If False, only rover (relative) PPK covariance is used.
+    base_position : dict, optional
+        Pre-resolved base position from
+        :func:`~dji_geotagger.ppk.base_position.resolve_base_position`. Takes
+        priority over `base_obs` / `sum_file_path`, and is the only way to use
+        a base position that did not come from a .sum file.
 
     Returns
     -------
@@ -92,7 +98,11 @@ def pos2df(
     cov_PPP_ECEF = None
     coord_sys = None
     if base_error_propagation_on:
-        PPP_dict = sum_file_parser(base_obs=base_obs, sum_file_path=sum_file_path)
+        # Prefer a base position the caller already resolved: it may come from
+        # a source other than a .sum file (manually entered coordinates), and
+        # resolving once avoids re-parsing per rover file.
+        PPP_dict = base_position if base_position is not None else \
+            sum_file_parser(base_obs=base_obs, sum_file_path=sum_file_path)
         cov_PPP_ECEF = PPP_dict.get("cov_PPP_ECEF")
         coord_sys =  PPP_dict.get("coord_sys")
 

@@ -1,6 +1,39 @@
 from pathlib import Path
+from calendar import isleap
 import numpy as np
 from dji_geotagger.tools.tools import ECEF2ENU_vec
+
+
+def parse_ppp_epoch(epoch_str: str) -> tuple[str, float | None]:
+    """
+    Convert a CSRS-PPP epoch token into a decimal year.
+
+    The .sum POS records carry the reference epoch as ``YY:DDD:SSSSS``
+    (two-digit year, day-of-year, second-of-day), e.g. ``25:211:68415``.
+
+    A coordinate is meaningless without its epoch: in a plate-fixed frame such
+    as NAD83(CSRS) the North American plate moves 1-2 cm/yr, so a decade of
+    unstated epoch drift is a decimetre of unexplained bias.
+
+    Parameters
+    ----------
+    epoch_str : str
+        Raw epoch token from a POS line.
+
+    Returns
+    -------
+    tuple[str, float | None]
+        The raw token, and its decimal year (``None`` if unparseable).
+    """
+    try:
+        yy, ddd, sod = epoch_str.split(":")
+        # CSRS-PPP is a GPS-era product; a two-digit year is unambiguous.
+        year = 2000 + int(yy)
+        days = 366.0 if isleap(year) else 365.0
+        decimal_year = year + ((int(ddd) - 1) + int(sod) / 86400.0) / days
+        return epoch_str, decimal_year
+    except (ValueError, AttributeError):
+        return epoch_str, None
 
 def resolve_ppp_sum_file(
     base_obs: str | None = None,
@@ -107,14 +140,21 @@ def sum_file_parser(
     dict
         Dictionary containing parsed PPP results:
         
+        Provenance
+        ----------
+        - source : "csrs-ppp-sum"
+        - source_detail : path of the .sum file used
+
         Coordinates
         -----------
         - X, Y, Z : ECEF coordinates (metres)
         - lat_dd : latitude in decimal degrees
         - lon_dd : longitude in decimal degrees
-        - hgt : ellipsoidal height (metres)
+        - hgt : **ellipsoidal** height (metres), not orthometric
         - coord_sys : coordinate system string (e.g., "IGb20")
-        
+        - epoch : raw reference epoch token (e.g., "25:211:68415")
+        - epoch_decimal_year : same epoch as a decimal year, or None
+
         Covariance & Uncertainty
         ------------------------
         - cov_PPP_ECEF : 3×3 covariance matrix in ECEF (m²)
@@ -138,6 +178,8 @@ def sum_file_parser(
     rho_XY = rho_XZ = rho_YZ = None
     lat_dd = lon_dd = hgt = None
     coord_sys = None
+    epoch_raw = None
+    mode = None
 
     with open(sum_file_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -146,10 +188,27 @@ def sum_file_parser(
             if len(parts) < 2:
                 continue
 
-            if parts[0] == "POS" and parts[1] == "X":
+            if parts[0] == "MOD":
+                # MOD precedes the POS block, so this guard runs before any
+                # attempt to read columns a non-static solution does not have.
+                mode = parts[1].upper()
+                if mode != "STATIC":
+                    raise ValueError(
+                        f"[ERROR] PPP summary was produced in {mode} mode, "
+                        f"but a base station requires a STATIC solution.\n"
+                        f"        {sum_file_path.name}\n"
+                        "        A kinematic .sum reports only a priori "
+                        "coordinates - no estimated position, sigma or "
+                        "correlations - because the solution is a per-epoch "
+                        "trajectory in the .pos file, not a single point.\n"
+                        "        Reprocess with CSRS-PPP in Static mode."
+                    )
+
+            elif parts[0] == "POS" and parts[1] == "X":
                 coord_sys = str((parts[2])) #coordinate system
+                epoch_raw = str(parts[3])  # YY:DDD:SSSSS reference epoch
                 est_X = float(parts[5])
-                sigma_X = float(parts[7])  # 95% 
+                sigma_X = float(parts[7])  # 95%
                 
 
             elif parts[0] == "POS" and parts[1] == "Y":
@@ -197,16 +256,26 @@ def sum_file_parser(
     cov_PPP_ENU = ECEF2ENU_vec(cov_ecef=cov_PPP_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
     PPP_sigma_ENU = np.sqrt(np.diag(cov_PPP_ENU))
 
+    # Reference epoch. Not included in the fatal check above: a missing epoch
+    # degrades provenance but does not invalidate the coordinates themselves.
+    epoch_str, epoch_decimal_year = parse_ppp_epoch(epoch_raw)
+
     # Summary
     if print_report:
-        print(f"[INFO] Coord system : {coord_sys}")
+        print(f"[INFO] Coord system : {coord_sys}"
+              + (f" @ {epoch_decimal_year:.4f}" if epoch_decimal_year else ""))
         print(f"[INFO] Base ECEF    : ({est_X:.4f}, {est_Y:.4f}, {est_Z:.4f}) m")
         print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
         print(f"[INFO] Base 1σ ENU  : E={PPP_sigma_ENU[0]*100:.2f} cm, N={PPP_sigma_ENU[1]*100:.2f} cm, U={PPP_sigma_ENU[2]*100:.2f} cm")
         print(f"[INFO] Base 1σ ECEF : X={PPP_sigma_ECEF[0]*100:.2f} cm, Y={PPP_sigma_ECEF[1]*100:.2f} cm, Z={PPP_sigma_ECEF[2]*100:.2f} cm")
 
     return {
+        "source": "csrs-ppp-sum",
+        "source_detail": str(sum_file_path),
+        "mode": mode,
         "coord_sys": coord_sys,
+        "epoch": epoch_str,
+        "epoch_decimal_year": epoch_decimal_year,
         "X": est_X,
         "Y": est_Y,
         "Z": est_Z,

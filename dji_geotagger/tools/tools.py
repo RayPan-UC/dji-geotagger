@@ -48,6 +48,48 @@ def ECEF2ENU_vec(
     return R @ cov_ecef @ R.T
 
 
+def ENU2ECEF_vec(
+        cov_enu: np.ndarray,
+        lon_deg: float,
+        lat_deg: float
+    ) -> np.ndarray:
+    """
+    Transform a 3×3 covariance matrix from ENU (East-North-Up) to ECEF frame.
+
+    Exact inverse of :func:`ECEF2ENU_vec`. Needed when a base-station position
+    is supplied by the user as ENU standard deviations (the form published on
+    control-point datasheets) but the pipeline combines covariances in ECEF.
+
+    Parameters
+    ----------
+    cov_enu : np.ndarray
+        3×3 covariance matrix in ENU frame (m²).
+    lon_deg : float
+        Geodetic longitude in decimal degrees.
+    lat_deg : float
+        Geodetic latitude in decimal degrees.
+
+    Returns
+    -------
+    np.ndarray
+        3×3 covariance matrix in ECEF frame (m²).
+
+    Notes
+    -----
+    Transformation formula: Cov_ECEF = R^T @ Cov_ENU @ R, where R is the same
+    ECEF→ENU rotation used by :func:`ECEF2ENU_vec`. R is orthonormal, so its
+    transpose is its inverse.
+    """
+    lon_rad = np.radians(lon_deg)
+    lat_rad = np.radians(lat_deg)
+    R = np.array([
+        [                -np.sin(lon_rad),                  np.cos(lon_rad),               0],
+        [-np.sin(lat_rad)*np.cos(lon_rad), -np.sin(lat_rad)*np.sin(lon_rad), np.cos(lat_rad)],
+        [ np.cos(lat_rad)*np.cos(lon_rad),  np.cos(lat_rad)*np.sin(lon_rad), np.sin(lat_rad)]
+    ])
+    return R.T @ cov_enu @ R
+
+
 def NED2ECEF_vec(dN, dE, dD, lat_deg, lon_deg) -> np.ndarray:
     """
     Convert a vector from local NED frame to ECEF frame (vector only, no translation).

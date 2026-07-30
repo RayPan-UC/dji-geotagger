@@ -18,7 +18,8 @@ def process_ppk(
     base_error_propagation_on: bool = True,
     output_dir: Path = None,
     RTKLIB: Path = None,
-    overwrite: bool = False
+    overwrite: bool = False,
+    base_position: dict = None
     ) -> pd.DataFrame:
     """
     Run a single RTKLIB PPK solution (rnx2rtkp) for one rover observation file and
@@ -74,6 +75,14 @@ def process_ppk(
         Optional RTKLIB location passed to `get_rtklib_executable()` to locate `rnx2rtkp`.
     overwrite : bool, default False
         If True, re-run rnx2rtkp even if the output .pos already exists.
+    base_position : dict, optional
+        Pre-resolved base station position from
+        :func:`~dji_geotagger.ppk.base_position.resolve_base_position`. Supply
+        this to use a base position obtained from automated CSRS-PPP
+        submission or from manually entered coordinates, rather than from a
+        .sum file on disk. Takes priority over `sum_file_path` / `base_obs`,
+        and is resolved once and reused for both the RTKLIB config and the
+        covariance propagation.
 
     Returns
     -------
@@ -114,8 +123,11 @@ def process_ppk(
     # Check rnx2rtkp
     rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB)
 
-    # Handle base station configuration
-    base_conf = resolve_base_position(base_obs, sum_file_path, user_conf)
+    # Handle base station configuration. Resolved once here and reused for both
+    # the RTKLIB config and the covariance propagation in pos2df, so the .sum
+    # is not parsed twice per rover file.
+    base_conf = base_pos_to_rtklib_conf(base_obs, sum_file_path, user_conf,
+                                        base_position=base_position)
     user_conf.update(base_conf)
     conf_file = override_rtklib_config(user_conf)
 
@@ -154,25 +166,31 @@ def process_ppk(
 
     # .pos -> df
     df = pos2df(
-            pos_file=output_pos, 
-            base_obs=base_obs, 
+            pos_file=output_pos,
+            base_obs=base_obs,
             sum_file_path=sum_file_path,
-            base_error_propagation_on=base_error_propagation_on)
+            base_error_propagation_on=base_error_propagation_on,
+            base_position=base_position)
     return df
 
 
-def resolve_base_position(
+def base_pos_to_rtklib_conf(
     base_obs: Path = None,
     sum_file_path: str | Path = None,
-    user_conf: dict | None = None    
+    user_conf: dict | None = None,
+    base_position: dict | None = None
     ) -> dict:
     """
     Resolve base station ECEF XYZ coordinates and return RTKLIB config entries.
 
     Resolution priority
     -------------------
+    0) If `base_position` is provided, use it. This is a base position already
+       resolved by
+       :func:`~dji_geotagger.ppk.base_position.resolve_base_position`, and may
+       originate from any source, not only a .sum file.
     1) If `sum_file_path` is provided, parse the CSRS-PPP .sum file directly.
-    2) If `base_obs` is provided (without explicit `sum_file_path`), attempt to 
+    2) If `base_obs` is provided (without explicit `sum_file_path`), attempt to
        auto-locate a .sum file using `sum_file_parser()`.
     3) Otherwise, use manual XYZ from `user_conf` keys: ant2-pos1, ant2-pos2, ant2-pos3.
 
@@ -207,8 +225,11 @@ def resolve_base_position(
 
     required = {"ant2-pos1", "ant2-pos2", "ant2-pos3"} # for Priority 3
     user_conf = user_conf or {}
+    # Priority 0: caller already resolved the base position (any source)
+    if base_position is not None:
+        X, Y, Z = base_position["X"], base_position["Y"], base_position["Z"]
     # Priority 1 & 2: .sum file
-    if sum_file_path or base_obs:
+    elif sum_file_path or base_obs:
         PPP_result = sum_file_parser(base_obs=base_obs, sum_file_path=sum_file_path)
         X, Y, Z = PPP_result["X"], PPP_result["Y"], PPP_result["Z"]
     # Priority 3: manual user_conf
