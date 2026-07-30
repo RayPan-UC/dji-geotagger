@@ -5,6 +5,7 @@ from dji_geotagger.ppk.ppk_solver import process_ppk
 from dji_geotagger.core.mrk_parser import mrk2df
 from dji_geotagger.core.xml_parser import parse_img_dir
 from dji_geotagger.core.camera_pos_solver import compute_camera_position
+from dji_geotagger.ppk.base_position import resolve_base_position
 
 
 def geotag(
@@ -12,7 +13,8 @@ def geotag(
     base_obs: str,
     base_nav: str,
     sum_file_path: str = None,
-    full_output: bool = False
+    full_output: bool = False,
+    base_position: dict = None
 ) -> pd.DataFrame:
     """
     High-level API: run an end-to-end DJI geotagging pipeline for one or more flight folders.
@@ -39,9 +41,25 @@ def geotag(
     sum_file_path : str | Path, optional
         Path to CSRS-PPP summary file (.sum) for base station coordinates/covariance.
         If provided, PPK covariance can include base uncertainty propagation (depends on `process_ppk`).
+        Ignored when `base_position` is given.
     full_output : bool, default False
         Passed to `compute_camera_position`.
         If True, return all intermediate columns; if False, return a compact subset.
+    base_position : dict, optional
+        Base station position from
+        :func:`~dji_geotagger.ppk.base_position.resolve_base_position`. This is
+        how the non-.sum sources are reached: automated CSRS-PPP submission, or
+        directly entered coordinates. When omitted, the base position is
+        resolved from `sum_file_path` / `base_obs` as before.
+
+        Resolving it yourself first is recommended for anything long-running,
+        because it lets you inspect the base coordinates before committing to
+        the full pipeline::
+
+            bp = dgt.resolve_base_position(
+                mode="online", base_obs=base_obs, email="you@example.com")
+            # ... check the printed position ...
+            df = dgt.geotag(flights, base_obs, base_nav, base_position=bp)
 
     Returns
     -------
@@ -57,6 +75,18 @@ def geotag(
     FileNotFoundError / RuntimeError
         Propagated from lower-level functions (e.g., RTKLIB execution, missing base files, parsing errors).
     """
+    # Resolve the base position once, before any flight is processed. Two
+    # reasons: the .sum was previously re-parsed for every flight, and a bad
+    # base position should surface before RTKLIB spends minutes on the first
+    # flight rather than after.
+    if base_position is None:
+        base_position = resolve_base_position(
+            mode="sum",
+            base_obs=base_obs,
+            sum_file_path=sum_file_path,
+            print_report=True,
+        )
+
     results = []
 
     for flight_dir in flight_folders:
@@ -70,10 +100,11 @@ def geotag(
         rover_raw = rover_raws[0]
         rover_obs, _ = raw2rinex(rover_raw)
         pos_df = process_ppk(
-                        base_obs, 
-                        base_nav, 
+                        base_obs,
+                        base_nav,
                         rover_obs=rover_obs,
-                        sum_file_path=sum_file_path)
+                        sum_file_path=sum_file_path,
+                        base_position=base_position)
 
         # Step 3: MRK
         mrks = list(flight_dir.glob("*.MRK"))
