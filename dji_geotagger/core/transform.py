@@ -414,6 +414,27 @@ def _source_latlon(X, Y, Z):
     return np.asarray(lat), np.asarray(lon)
 
 
+def _reorder_grid_first(columns: list[str]) -> list[str]:
+    """
+    Move ``cam_E``/``cam_N`` in front of the other coordinate columns.
+
+    A projected export carries three representations of the same point - grid,
+    geographic and ECEF - and the grid one is what the caller asked for, so it
+    should be the one they meet first. Everything else keeps its order.
+    """
+    grid = [c for c in ("cam_E", "cam_N") if c in columns]
+    if not grid:
+        return columns
+
+    rest = [c for c in columns if c not in grid]
+    anchor = next((c for c in ("cam_lat", "cam_lon", "cam_h", "cam_X")
+                   if c in rest), None)
+    if anchor is None:
+        return rest + grid
+    at = rest.index(anchor)
+    return rest[:at] + grid + rest[at:]
+
+
 def _resolve_epoch(df: pd.DataFrame, source_epoch: float | None) -> float:
     """
     Decide the epoch to transform at, and refuse to proceed without one.
@@ -655,6 +676,9 @@ def transform_coordinates(
     if target.is_projected:
         out["cam_E"] = np.where(valid, native[0], np.nan)
         out["cam_N"] = np.where(valid, native[1], np.nan)
+        # Appending would strand the columns the caller actually asked for at
+        # the far right of the file, past the attitude and flight columns.
+        out = out[_reorder_grid_first(list(out.columns))]
 
     # Displacement, so the caller can see how large a change was just made. A
     # transformation that moves nothing is the signature of a ballpark
