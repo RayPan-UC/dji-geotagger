@@ -422,29 +422,52 @@ def _resolve_epoch(df: pd.DataFrame, source_epoch: float | None) -> float:
     transformation as if the point were stationary. At the reference site that
     is a 0.29 m error, identical whether the mistake is made through pyproj or
     through NRCan's own web API.
+
+    Two columns can supply it. ``epoch_decimal_year`` is the machine-readable
+    one, but ``geotag()`` keeps only the raw ``epoch`` token in its compact
+    output, and that is also the only one that survives a round trip through
+    CSV, so the token is parsed when the decimal year is absent.
     """
     if source_epoch is not None:
         return float(source_epoch)
 
+    values = []
     if "epoch_decimal_year" in df.columns:
-        values = pd.unique(df["epoch_decimal_year"].dropna())
-        if len(values) == 1:
-            return float(values[0])
-        if len(values) > 1:
+        values = [float(v) for v in pd.unique(df["epoch_decimal_year"].dropna())]
+
+    if not values and "epoch" in df.columns:
+        # Both forms occur: "25:211:68415" from a .sum, "2010.0" from manual
+        # entry. _epoch_to_decimal_year handles either.
+        from dji_geotagger.ppk.base_position import _epoch_to_decimal_year
+        tokens = pd.unique(df["epoch"].dropna())
+        parsed = [_epoch_to_decimal_year(str(t)) for t in tokens]
+        if any(p is None for p in parsed):
+            unparsed = [str(t) for t, p in zip(tokens, parsed) if p is None]
             raise TransformError(
-                f"[ERROR] The table mixes {len(values)} reference epochs "
-                f"({', '.join(f'{v:.4f}' for v in sorted(values))}).\n"
-                "        Those rows came from different base solutions and "
-                "cannot share one transformation. Split them, or pass "
-                "source_epoch= to force a single epoch."
+                f"[ERROR] The 'epoch' column could not be read: {unparsed}.\n"
+                "        Expected either a CSRS-PPP token such as "
+                "'25:211:68415' or a decimal year such as '2010.0'.\n"
+                "        Pass source_epoch=<decimal year> to state it directly."
             )
+        values = parsed
+
+    if len(values) == 1:
+        return values[0]
+    if len(values) > 1:
+        raise TransformError(
+            f"[ERROR] The table mixes {len(values)} reference epochs "
+            f"({', '.join(f'{v:.4f}' for v in sorted(values))}).\n"
+            "        Those rows came from different base solutions and "
+            "cannot share one transformation. Split them, or pass "
+            "source_epoch= to force a single epoch."
+        )
 
     raise TransformError(
         "[ERROR] No reference epoch. A datum transformation without one is "
         "applied as if the ground were stationary, which at the reference "
         "site is a 0.29 m error - and it is silent.\n"
         "        Supply source_epoch=<decimal year>, or use a table that "
-        "still carries the 'epoch_decimal_year' column from geotag()."
+        "still carries 'epoch' or 'epoch_decimal_year' from geotag()."
     )
 
 
