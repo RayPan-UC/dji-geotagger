@@ -161,7 +161,14 @@ With `full_output=True`: `seq`, `GPS_time`, `GPS_week`, antenna position
 EXIF/XMP fields, and `flight`.
 
 After `transform_coordinates()` every coordinate column holds its value in the
-target frame, and a projected target adds `cam_E`/`cam_N`.
+target frame, and a projected target adds two more:
+
+| Column | Description |
+|--------|-------------|
+| `cam_E`, `cam_N` | Camera centre easting/northing on the target grid (metres) |
+
+`coord_sys` then names the target CRS in full, e.g.
+`NAD83(CSRS)v8 / UTM zone 11N`, so the file says which frame it is in.
 
 Skipped flights are listed in `geotag_df.attrs["failed_flights"]`.
 
