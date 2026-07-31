@@ -3,6 +3,9 @@ import subprocess
 from datetime import datetime, timezone, timedelta
 from dji_geotagger.tools.install_RTKLIB import get_rtklib_executable
 import georinex as gr
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def raw2rinex(
@@ -11,6 +14,7 @@ def raw2rinex(
     antenna_height_in_meter: float = 0.0,
     appr_time: str = None,
     RTKLIB: str = None,
+    auto_install: bool = None,
     ) -> tuple[Path, Path]:
     """
     Convert raw GNSS files (.dat, .bin) to RINEX format using RTKLIB convbin.
@@ -39,6 +43,12 @@ def raw2rinex(
     RTKLIB : str | Path, optional
         Path to RTKLIB installation directory. If not provided, uses system default.
         Default is None.
+    auto_install : bool, optional
+        Controls what happens when the required RTKLIB executable is missing.
+        ``True`` downloads it, ``False`` refuses, ``None`` (default) asks on
+        the console but only when running interactively. Non-interactive
+        callers such as a GUI get an error instead of a hung prompt; see
+        :func:`~dji_geotagger.tools.install_RTKLIB.get_rtklib_executable`.
 
     Returns
     -------
@@ -69,7 +79,7 @@ def raw2rinex(
         raise FileNotFoundError(f"[ERROR] Input file not found: {input_path}")
     
     # make sure convbin exist
-    convbin = get_rtklib_executable("convbin", RTKLIB)
+    convbin = get_rtklib_executable("convbin", RTKLIB, auto_install)
     
     # User input (antenna_height)
     ah = float(antenna_height_in_meter or 0.0)
@@ -122,7 +132,7 @@ def raw2rinex(
 
     # Skip if exist
     if obs_path.exists() and nav_path.exists():
-        print(f"[WARNING] Output exists, skipping: {input_path}")
+        logger.warning(f"Output exists, skipping: {input_path}")
         return obs_path, nav_path
             
 
@@ -137,7 +147,7 @@ def raw2rinex(
         str(input_path)
     ]
 
-    print(f"[INFO] Converting: {input_path.name}  ({type_dir})")
+    logger.info(f"Converting: {input_path.name}  ({type_dir})")
 
     try:
         subprocess.run(
@@ -146,7 +156,7 @@ def raw2rinex(
             stdout=subprocess.DEVNULL, 
             stderr=subprocess.DEVNULL
             )        
-        print(f"[INFO] ✓ Converted. Output: {rinex_dir}")
+        logger.info(f"✓ Converted. Output: {rinex_dir}")
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"[ERROR] Failed to convert {input_path}") from e
     
@@ -194,7 +204,7 @@ def PPP_help(obs_path: Path):
     # get last epoch
     times = gr.gettime(obs_path)
     if len(times) == 0:
-        print("[WARNING] Cannot determine last epoch from RINEX file.")
+        logger.warning("Cannot determine last epoch from RINEX file.")
         return
     last_epoch = times[-1].astype("datetime64[ms]").astype(datetime).replace(tzinfo=timezone.utc)
 
@@ -220,8 +230,8 @@ def PPP_help(obs_path: Path):
 
 
     if current_available != "FINAL":
-        print(f"""
-[HINT] CSRS-PPP Product Tier Estimate: {current_available}
+        logger.info(f"""
+CSRS-PPP Product Tier Estimate: {current_available}
         TIME OF LAST OBS: {last_epoch.strftime('%Y-%m-%d %H:%M UTC')}
         Estimated FINAL availability: {final_available.strftime('%Y-%m-%d %H:%M UTC')}
 
@@ -231,8 +241,8 @@ def PPP_help(obs_path: Path):
         - Final: ~12–15 days after end of week (UTC Sunday)
         """)
     else:
-        print(f"""
-[HINT] You can now submit the RINEX file to CSRS-PPP for precise positioning:
+        logger.info(f"""
+You can now submit the RINEX file to CSRS-PPP for precise positioning:
               
         - Product Tier Estimate: {current_available}
 

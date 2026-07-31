@@ -6,6 +6,9 @@ from dji_geotagger.ppk.ephemeris_downloader import download_igs_data
 from dji_geotagger.ppk.PPP_sum_parser import sum_file_parser
 from dji_geotagger.config.import_config import override_rtklib_config
 from dji_geotagger.core.pos_parser import pos2df
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def process_ppk(
@@ -19,7 +22,8 @@ def process_ppk(
     output_dir: Path = None,
     RTKLIB: Path = None,
     overwrite: bool = False,
-    base_position: dict = None
+    base_position: dict = None,
+    auto_install: bool = None
     ) -> pd.DataFrame:
     """
     Run a single RTKLIB PPK solution (rnx2rtkp) for one rover observation file and
@@ -83,6 +87,12 @@ def process_ppk(
         .sum file on disk. Takes priority over `sum_file_path` / `base_obs`,
         and is resolved once and reused for both the RTKLIB config and the
         covariance propagation.
+    auto_install : bool, optional
+        Controls what happens when the required RTKLIB executable is missing.
+        ``True`` downloads it, ``False`` refuses, ``None`` (default) asks on
+        the console but only when running interactively. Non-interactive
+        callers such as a GUI get an error instead of a hung prompt; see
+        :func:`~dji_geotagger.tools.install_RTKLIB.get_rtklib_executable`.
 
     Returns
     -------
@@ -121,7 +131,7 @@ def process_ppk(
     
 
     # Check rnx2rtkp
-    rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB)
+    rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB, auto_install)
 
     # Handle base station configuration. Resolved once here and reused for both
     # the RTKLIB config and the covariance propagation in pos2df, so the .sum
@@ -140,10 +150,10 @@ def process_ppk(
 
     need_solve = True
     if output_pos.exists():
-        print(f"[WARNING] {output_pos.name} already exists.")
+        logger.warning(f"{output_pos.name} already exists.")
         need_solve = overwrite
         if not need_solve:
-            print(f"[INFO] Using existing: {output_pos.name}")
+            logger.info(f"Using existing: {output_pos.name}")
 
     if need_solve:
         cmd = [
@@ -157,9 +167,9 @@ def process_ppk(
         ]
 
         try:
-            print(f"[INFO] Solving: {rover_obs.name} ...")
+            logger.info(f"Solving: {rover_obs.name} ...")
             subprocess.run(cmd, check=True)
-            print(f"[INFO] Finished: {output_pos.name}")
+            logger.info(f"Finished: {output_pos.name}")
         
         except subprocess.CalledProcessError:
             raise RuntimeError(f"[ERROR] Failed to process: {rover_obs.name}")
@@ -234,7 +244,7 @@ def base_pos_to_rtklib_conf(
         X, Y, Z = PPP_result["X"], PPP_result["Y"], PPP_result["Z"]
     # Priority 3: manual user_conf
     elif required.issubset(user_conf):
-        print("[INFO] Using manual base coordinates from user_conf.")
+        logger.info("Using manual base coordinates from user_conf.")
         X, Y, Z = user_conf["ant2-pos1"], user_conf["ant2-pos2"], user_conf["ant2-pos3"]    
     # No input
     else:

@@ -7,6 +7,9 @@ from tqdm import tqdm
 from dji_geotagger.ppk.PPP_sum_parser import sum_file_parser
 from dji_geotagger.tools.tools import ECEF2ENU_vec
 import pymap3d as pm
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def pos_cov_wrapper(sdx, sdy, sdz, sdxy, sdyz, sdzx) -> np.ndarray:
@@ -169,12 +172,12 @@ def pos2df(
                 })
 
         except Exception as e:
-            print(f"[ERROR] Line: {line.strip()} → {e}")
+            logger.error(f"Line: {line.strip()} → {e}")
             continue
     
     # Save as Dataframe
     df = pd.DataFrame(records)
-    print(f"[INFO] Parsed {pos_file.name} ({len(df)} records)")
+    logger.info(f"Parsed {pos_file.name} ({len(df)} records)")
     return df
 
 def validate_pos_file(pos_file: Path) -> None:

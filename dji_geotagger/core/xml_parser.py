@@ -2,6 +2,9 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image
 from tqdm import tqdm
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_img_info(
@@ -49,7 +52,7 @@ def parse_img_info(
         with Image.open(img) as im:
             xmp_data = im.getxmp()
         if not xmp_data:
-            print(f"[WARNING] No metadata found at {img}. Skipped")
+            logger.warning(f"No metadata found at {img}. Skipped")
             return None
         desc = xmp_data['xmpmeta']['RDF']['Description']
 
@@ -84,7 +87,7 @@ def parse_img_info(
         }
         
     except Exception as e:
-        print(f"[WARNING] Error occurred while parsing image's metadata. {e}")
+        logger.warning(f"Error occurred while parsing image's metadata. {e}")
         return None
 
 
@@ -125,7 +128,7 @@ def parse_img_dir(
     image_files = sorted(img_dir.glob("*.jpg")) + sorted(img_dir.glob("*.tif"))
 
     if not image_files:
-        print(f"[WARNING] No images found in {img_dir}")
+        logger.warning(f"No images found in {img_dir}")
         return pd.DataFrame()
 
     records = []
@@ -136,7 +139,7 @@ def parse_img_dir(
 
     # Save as Dataframe
     df = pd.DataFrame(records)
-    print(f"[INFO] Parsed {len(image_files)} images ({len(df)} records)")
+    logger.info(f"Parsed {len(image_files)} images ({len(df)} records)")
     return df
 
 

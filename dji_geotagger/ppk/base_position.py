@@ -30,6 +30,9 @@ import numpy as np
 from pyproj import Transformer
 
 from dji_geotagger.tools.tools import ECEF2ENU_vec, ENU2ECEF_vec
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 # EPSG:4978 geocentric (ECEF) <-> EPSG:4979 geographic 3D. Both are GRS80/WGS84
 # ellipsoid; the frames this tool handles (IGb20, ITRF20xx, NAD83(CSRS)) share
@@ -204,18 +207,18 @@ def build_base_position(
 
     if print_report:
         epoch_note = f" @ {epoch}" if epoch else " (epoch not stated)"
-        print("[INFO] Base position (manual entry) - verify before proceeding")
-        print(f"[INFO] Frame        : {coord_sys}{epoch_note}")
-        print(f"[INFO] Base ECEF    : ({X:.4f}, {Y:.4f}, {Z:.4f}) m")
-        print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, "
-              f"{hgt:.4f} m ellipsoidal)")
-        print(f"[INFO] Base 1σ ENU  : E={sigma_ENU_out[0]*100:.2f} cm, "
-              f"N={sigma_ENU_out[1]*100:.2f} cm, "
-              f"U={sigma_ENU_out[2]*100:.2f} cm  [user-supplied]")
+        logger.info("Base position (manual entry) - verify before proceeding")
+        logger.info(f"Frame        : {coord_sys}{epoch_note}")
+        logger.info(f"Base ECEF    : ({X:.4f}, {Y:.4f}, {Z:.4f}) m")
+        logger.info(f"Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, "
+                    f"{hgt:.4f} m ellipsoidal)")
+        logger.info(f"Base 1σ ENU  : E={sigma_ENU_out[0]*100:.2f} cm, "
+                    f"N={sigma_ENU_out[1]*100:.2f} cm, "
+                    f"U={sigma_ENU_out[2]*100:.2f} cm  [user-supplied]")
         if not epoch:
-            print("[WARNING] No epoch stated. For plate-fixed frames such as "
-                  "NAD83(CSRS) this leaves the coordinate ambiguous at "
-                  "1-2 cm/yr.")
+            logger.warning("No epoch stated. For plate-fixed frames such as "
+                           "NAD83(CSRS) this leaves the coordinate ambiguous at "
+                           "1-2 cm/yr.")
 
     return {
         "source": "manual",

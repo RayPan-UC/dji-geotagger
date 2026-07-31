@@ -8,6 +8,9 @@ import shutil
 import time
 import georinex as gr
 from dji_geotagger.tools.tools import utc2gps
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_obs_time_range(obs_file: Path) -> tuple[datetime, datetime]:
@@ -70,7 +73,7 @@ def download_file(url: str, dest: Path) -> bool:
         # If decompressed file already exists, skip download
         decompressed_path = dest.with_suffix('')
         if decompressed_path.exists():
-            print(f"[INFO] Already exists: {decompressed_path.name}, skipping download.")
+            logger.info(f"Already exists: {decompressed_path.name}, skipping download.")
             return True
 
         # If .gz file already exists, remove it first
@@ -78,7 +81,7 @@ def download_file(url: str, dest: Path) -> bool:
             try:
                 dest.unlink()
             except Exception as e:
-                print(f"[WARNING] Could not remove existing file: {dest} ({e})")
+                logger.warning(f"Could not remove existing file: {dest} ({e})")
                 return False
 
         # Download the .gz file
@@ -86,7 +89,7 @@ def download_file(url: str, dest: Path) -> bool:
         if response.status_code == 200:
             with open(dest, 'wb') as f:
                 f.write(response.content)
-            print(f"[INFO] Downloaded: {dest.name}")
+            logger.info(f"Downloaded: {dest.name}")
 
             # Decompress the .gz file
             with gzip.open(dest, 'rb') as f_in:
@@ -98,11 +101,11 @@ def download_file(url: str, dest: Path) -> bool:
             dest.unlink()
             return True
         else:
-            print(f"[WARNING] Failed ({response.status_code}): {url}")
+            logger.warning(f"Failed ({response.status_code}): {url}")
             return False
 
     except Exception as e:
-        print(f"[ERROR] Download failed: {url}\n{e}")
+        logger.error(f"Download failed: {url}\n{e}")
         return False
 
 
@@ -247,7 +250,7 @@ def download_igs_data(
                     eph_files.append(Path(f_unzipped))
 
         if success:
-            print(f"[INFO] All precise IGS data downloaded successfully! (Product type: {level})")
+            logger.info(f"All precise IGS data downloaded successfully! (Product type: {level})")
             return eph_files
     raise RuntimeError(ephemeris_download_fail())
 

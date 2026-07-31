@@ -2,6 +2,9 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from dji_geotagger.tools.tools import NED2ECEF_vec
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def mrk2df(mrk_file: str | Path) -> pd.DataFrame:
@@ -146,5 +149,5 @@ def mrk2df(mrk_file: str | Path) -> pd.DataFrame:
     except Exception as e:
         raise RuntimeError(f"[ERROR] Failed to parse .MRK file: {mrk_file}. {e}")
     
-    print(f"[INFO] Parsed {mrk_file.name} ({len(df)} records)")
+    logger.info(f"Parsed {mrk_file.name} ({len(df)} records)")
     return df

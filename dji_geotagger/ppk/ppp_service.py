@@ -54,6 +54,10 @@ from pathlib import Path
 
 import requests
 
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
+
 BASE_URL = "https://webapp.csrs-scrs.nrcan-rncan.gc.ca"
 SUBMIT_URL = f"{BASE_URL}/CSRS-PPP/service/submit"
 RESULTS_URL = f"{BASE_URL}/CSRS-PPP/service/results"
@@ -156,8 +160,8 @@ def submit_rinex(
     }
 
     size_mb = rinex_path.stat().st_size / 1e6
-    print(f"[INFO] Submitting {rinex_path.name} ({size_mb:.1f} MB) to "
-          f"CSRS-PPP [{process_type}, {sysref}]")
+    logger.info(f"Submitting {rinex_path.name} ({size_mb:.1f} MB) to "
+                f"CSRS-PPP [{process_type}, {sysref}]")
 
     try:
         with rinex_path.open("rb") as handle:
@@ -192,7 +196,7 @@ def submit_rinex(
     # Print the key in full: it is the only handle on a submitted job. If the
     # poll loop is interrupted, this is what lets the user recover the results
     # instead of resubmitting.
-    print(f"[INFO] Accepted. Processing key:\n       {body}")
+    logger.info(f"Accepted. Processing key:\n       {body}")
     return body
 
 
@@ -259,8 +263,8 @@ def wait_for_results(
         if full:
             archive = _try_fetch_archive(full[0])
             if archive is not None:
-                print(f"[INFO] Processing complete ({waited}s, "
-                      f"{len(archive) / 1e3:.0f} kB).")
+                logger.info(f"Processing complete ({waited}s, "
+                            f"{len(archive) / 1e3:.0f} kB).")
                 return archive
 
         if waited >= timeout:
@@ -269,7 +273,7 @@ def wait_for_results(
                 f"The job may still be queued. Retrieve it later with this "
                 f"key:\n        {key}")
 
-        print(f"[INFO] Still processing... ({waited}s elapsed)")
+        logger.info(f"Still processing... ({waited}s elapsed)")
         time.sleep(poll_interval)
         waited += poll_interval
 
@@ -349,7 +353,7 @@ def save_results(archive_bytes: bytes, out_dir: str | Path) -> Path:
         )
 
     sum_path = out_dir / sums[0]
-    print(f"[INFO] Extracted PPP summary: {sum_path.name}")
+    logger.info(f"Extracted PPP summary: {sum_path.name}")
     return sum_path
 
 

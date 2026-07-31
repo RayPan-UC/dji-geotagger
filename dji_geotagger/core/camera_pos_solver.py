@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 import pymap3d as pm
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def compute_camera_position(
@@ -60,7 +63,7 @@ def compute_camera_position(
     # Step 4
     exposure_df = format_output(exposure_df, full_output=full_output)
 
-    print(f"[INFO] Camera position computed for {len(exposure_df)} images")
+    logger.info(f"Camera position computed for {len(exposure_df)} images")
     return exposure_df
 
 
@@ -99,9 +102,9 @@ def match_mrk_xml(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
     n_matched = len(exposure_meta_df)
 
     if n_matched != n_mrk or n_matched != n_img:
-        print(f"[WARNING] Match count mismatch: MRK={n_mrk}, XML={n_img}, Matched={n_matched}")
+        logger.warning(f"Match count mismatch: MRK={n_mrk}, XML={n_img}, Matched={n_matched}")
     else:
-        print(f"[INFO] Matched {n_matched} records (MRK <-> XML)")
+        logger.info(f"Matched {n_matched} records (MRK <-> XML)")
 
     return exposure_meta_df
 
@@ -166,10 +169,10 @@ def interpolate_pos_at_exposure(
     if outside_mask.any():
         n_outside = int(outside_mask.sum())
         exposure_df.loc[outside_mask, ["X", "Y", "Z"]] = np.nan
-        print(
-            f"[WARNING] {n_outside} exposure epochs outside PPK trajectory range "
-            f"[{pos_t.min():.3f}, {pos_t.max():.3f}]. "
-            f"Check raw GNSS data coverage. Affected images will have NaN position/cov/sigma."
+        logger.warning(
+                       f"{n_outside} exposure epochs outside PPK trajectory range "
+                       f"[{pos_t.min():.3f}, {pos_t.max():.3f}]. "
+                       f"Check raw GNSS data coverage. Affected images will have NaN position/cov/sigma."
         )
 
     # For inside: assign nearest epoch cov/sigma (no interpolation)
@@ -194,7 +197,7 @@ def interpolate_pos_at_exposure(
     # Propagate coordinate system label from PPK trajectory
     exposure_df["coord_sys"] = pos_df["coord_sys"].iloc[0]
 
-    print(f"[INFO] Interpolated PPK position for {len(exposure_df)} exposure epochs")
+    logger.info(f"Interpolated PPK position for {len(exposure_df)} exposure epochs")
     return exposure_df
 
 def apply_gimbal_correction(exposure_df: pd.DataFrame) -> pd.DataFrame:
@@ -238,7 +241,7 @@ def apply_gimbal_correction(exposure_df: pd.DataFrame) -> pd.DataFrame:
     exposure_df['cam_lon'] = cam_lon
     exposure_df['cam_h']   = cam_h
 
-    print(f"[INFO] Gimbal correction applied for {len(exposure_df)} images")
+    logger.info(f"Gimbal correction applied for {len(exposure_df)} images")
     return exposure_df
 
 def format_output(df: pd.DataFrame, full_output: bool = False) -> pd.DataFrame:

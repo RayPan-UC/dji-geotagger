@@ -2,6 +2,9 @@ from pathlib import Path
 from calendar import isleap
 import numpy as np
 from dji_geotagger.tools.tools import ECEF2ENU_vec
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_ppp_epoch(epoch_str: str) -> tuple[str, float | None]:
@@ -86,8 +89,8 @@ def resolve_ppp_sum_file(
             )
 
         if base_obs is not None:
-            print("[INFO] Both base_obs and sum_file_path provided. "
-                  f"Using user-specified .sum file. {sum_file_path}")
+            logger.info("Both base_obs and sum_file_path provided. "
+                        f"Using user-specified .sum file. {sum_file_path}")
 
         return sum_file_path
 
@@ -97,7 +100,7 @@ def resolve_ppp_sum_file(
         matches = list(base_obs.parent.glob(f"{base_obs.stem}.sum"))
 
         if matches:
-            print(f"[INFO] Auto-detected PPP summary file: {matches[0]}")
+            logger.info(f"Auto-detected PPP summary file: {matches[0]}")
             return matches[0]
 
         raise FileNotFoundError(
@@ -262,12 +265,12 @@ def sum_file_parser(
 
     # Summary
     if print_report:
-        print(f"[INFO] Coord system : {coord_sys}"
+        logger.info(f"Coord system : {coord_sys}"
               + (f" @ {epoch_decimal_year:.4f}" if epoch_decimal_year else ""))
-        print(f"[INFO] Base ECEF    : ({est_X:.4f}, {est_Y:.4f}, {est_Z:.4f}) m")
-        print(f"[INFO] Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
-        print(f"[INFO] Base 1σ ENU  : E={PPP_sigma_ENU[0]*100:.2f} cm, N={PPP_sigma_ENU[1]*100:.2f} cm, U={PPP_sigma_ENU[2]*100:.2f} cm")
-        print(f"[INFO] Base 1σ ECEF : X={PPP_sigma_ECEF[0]*100:.2f} cm, Y={PPP_sigma_ECEF[1]*100:.2f} cm, Z={PPP_sigma_ECEF[2]*100:.2f} cm")
+        logger.info(f"Base ECEF    : ({est_X:.4f}, {est_Y:.4f}, {est_Z:.4f}) m")
+        logger.info(f"Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, {hgt:.4f} m)")
+        logger.info(f"Base 1σ ENU  : E={PPP_sigma_ENU[0]*100:.2f} cm, N={PPP_sigma_ENU[1]*100:.2f} cm, U={PPP_sigma_ENU[2]*100:.2f} cm")
+        logger.info(f"Base 1σ ECEF : X={PPP_sigma_ECEF[0]*100:.2f} cm, Y={PPP_sigma_ECEF[1]*100:.2f} cm, Z={PPP_sigma_ECEF[2]*100:.2f} cm")
 
     return {
         "source": "csrs-ppp-sum",
