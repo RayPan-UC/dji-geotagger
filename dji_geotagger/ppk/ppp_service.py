@@ -67,10 +67,17 @@ RESULTS_URL = f"{BASE_URL}/CSRS-PPP/service/results"
 # cannot interpret. Carries no diagnostic detail.
 _REJECT_BODY = "ERROR [SEVERE]"
 _INVALID_KEY = "The processing key is not valid."
+# Returned when user_name is empty or unrecognised. Confirmed by
+# submitting with an empty address on 2026-07-31.
+_MISSING_EMAIL = "ERROR [004]"
 
 # Submission keys are a fixed-width URL-safe token.
 _KEY_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{40,120}$")
 _LINK_PATTERN = re.compile(r'href="([^"]*results/file\?[^"]*)"')
+# Deliberately permissive: the service is the authority on which addresses it
+# accepts. This only catches empty or obviously malformed input before a
+# multi-megabyte upload.
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 VALID_PROCESS_TYPES = ("Static", "Kinematic")
 VALID_SYSREFS = ("ITRF", "NAD83")
@@ -103,7 +110,12 @@ def submit_rinex(
         RINEX observation file, typically the base-station ``.obs``.
     email : str
         CSRS account email. Doubles as the identity and the notification
-        address; no password is involved.
+        address; no password is involved. The service checks that the field
+        is present and well-formed - an empty one is rejected with
+        ``ERROR [004]`` - but does not appear to verify it against a
+        registered account. Give your own address regardless: it is how NRCan
+        attributes the job, and how you recover results if the poll is
+        interrupted.
     process_type : {"Static", "Kinematic"}, optional
         Use ``"Static"`` for a base station on a fixed mark.
     sysref : {"ITRF", "NAD83"}, optional
@@ -132,6 +144,17 @@ def submit_rinex(
     rinex_path = Path(rinex_path)
     if not rinex_path.exists():
         raise FileNotFoundError(f"[ERROR] RINEX file not found: {rinex_path}")
+    # Checked before the upload, not after: the service rejects a missing
+    # address with ERROR [004], but only once the whole file has been sent,
+    # and base-station RINEX runs to tens of megabytes.
+    if not _EMAIL_PATTERN.match((email or "").strip()):
+        raise ValueError(
+            f"[ERROR] A CSRS account email is required, got {email!r}.\n"
+            "        CSRS-PPP identifies the submission by it - there is no "
+            "password and no session - and rejects the upload without one.\n"
+            "        Register free at "
+            "https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php"
+        )
     if process_type not in VALID_PROCESS_TYPES:
         raise ValueError(f"[ERROR] process_type must be one of "
                          f"{VALID_PROCESS_TYPES}, got {process_type!r}")
@@ -187,6 +210,12 @@ def submit_rinex(
         raise PPPServiceError(
             f"[ERROR] CSRS-PPP returned HTTP {response.status_code}. "
             f"The service may be down or the interface may have changed.")
+    if body == _MISSING_EMAIL:
+        raise PPPServiceError(
+            "[ERROR] CSRS-PPP rejected the submission with ERROR [004], which "
+            "it returns when the account email is missing or not "
+            "recognised.\n"
+            f"        Submitted as: {email!r}")
     if body == _REJECT_BODY:
         raise PPPServiceError(
             "[ERROR] CSRS-PPP rejected the submission (ERROR [SEVERE]). "
