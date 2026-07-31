@@ -285,6 +285,8 @@ def sum_file_parser(
         "lat_dd": lat_dd,
         "lon_dd": lon_dd,
         "hgt": hgt,
+        # A .sum always carries sigmas, so propagation is always possible here.
+        "uncertainty_available": True,
         "cov_PPP_ECEF": cov_PPP_ECEF,
         "cov_PPP_ENU": cov_PPP_ENU,
         "PPP_sigma_ECEF": PPP_sigma_ECEF,

@@ -33,3 +33,7 @@ dev/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+
+# Dev Notes
+notes/

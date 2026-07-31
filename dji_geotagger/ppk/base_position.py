@@ -74,9 +74,11 @@ def build_base_position(
         Geodetic latitude / longitude in decimal degrees.
     hgt : float, optional
         **Ellipsoidal** height in metres. See `height_type`.
-    sigma_ENU : array_like
-        1-sigma standard deviations ``[σE, σN, σU]`` in metres. Required, and
-        must be strictly positive - see Notes.
+    sigma_ENU : array_like or None
+        1-sigma standard deviations ``[σE, σN, σU]`` in metres, strictly
+        positive. Pass ``None`` only if the uncertainty is genuinely unknown;
+        base error propagation is then switched off for the whole run and the
+        result is labelled accordingly. See Notes.
     coord_sys : str
         Reference frame of the coordinates, e.g. ``"IGb20"``,
         ``"NAD83(CSRS)"``, ``"ITRF2020"``. Recorded verbatim; no datum
@@ -109,12 +111,19 @@ def build_base_position(
 
     Notes
     -----
-    **Why sigma is mandatory.** The pipeline adds this covariance to the PPK
-    per-epoch covariance (``cov_total = cov_PPK + cov_PPP``). Defaulting a
-    missing sigma to zero would assert that the base station is perfectly
-    known, and every reported uncertainty downstream would be optimistic by
-    exactly the amount the user failed to state - a silent error in the one
-    number a user checks to decide whether to trust the result.
+    **Why sigma is not defaulted.** The pipeline adds this covariance to the
+    PPK per-epoch covariance (``cov_total = cov_PPK + cov_PPP``). Silently
+    defaulting a missing sigma to zero would assert that the base station is
+    perfectly known, and every reported uncertainty downstream would be
+    optimistic by exactly the amount the user failed to state - a silent error
+    in the one number a user checks to decide whether to trust the result.
+
+    ``sigma_ENU=None`` is therefore handled by *disabling* base error
+    propagation rather than by assuming zero. The reported sigmas then cover
+    the PPK solution only, and ``uncertainty_available`` is False so the
+    limitation travels with the data instead of being forgotten. A stated but
+    conservative estimate is still better than no estimate; ``None`` is for
+    when nothing at all is known.
 
     **Why orthometric heights are refused rather than converted.** Published
     elevations are usually orthometric (CGVD28 / CGVD2013); ellipsoidal and
@@ -157,21 +166,26 @@ def build_base_position(
             "(X, Y, Z) or (lat_dd, lon_dd, hgt)."
         )
 
-    # Uncertainty: mandatory and strictly positive.
-    sigma_ENU = np.asarray(sigma_ENU, dtype=float).ravel()
-    if sigma_ENU.size != 3:
-        raise ValueError(
-            f"[ERROR] sigma_ENU must have 3 elements [σE, σN, σU], "
-            f"got {sigma_ENU.size}."
-        )
-    if not np.all(np.isfinite(sigma_ENU)) or np.any(sigma_ENU <= 0):
-        raise ValueError(
-            f"[ERROR] sigma_ENU must be strictly positive, got {sigma_ENU}.\n"
-            "        A zero or missing sigma asserts a perfectly known base "
-            "station and makes every downstream uncertainty optimistic.\n"
-            "        Use the values from the control-point datasheet, or a "
-            "deliberately conservative estimate such as (0.02, 0.02, 0.04) m."
-        )
+    # Uncertainty: either explicitly unknown, or strictly positive. Never zero.
+    uncertainty_available = sigma_ENU is not None
+    if uncertainty_available:
+        sigma_ENU = np.asarray(sigma_ENU, dtype=float).ravel()
+        if sigma_ENU.size != 3:
+            raise ValueError(
+                f"[ERROR] sigma_ENU must have 3 elements [σE, σN, σU], "
+                f"got {sigma_ENU.size}."
+            )
+        if not np.all(np.isfinite(sigma_ENU)) or np.any(sigma_ENU <= 0):
+            raise ValueError(
+                f"[ERROR] sigma_ENU must be strictly positive, got "
+                f"{sigma_ENU}.\n"
+                "        A zero sigma asserts a perfectly known base station "
+                "and makes every downstream uncertainty optimistic.\n"
+                "        Use the values from the control-point datasheet, a "
+                "deliberately conservative estimate such as "
+                "(0.02, 0.02, 0.04) m, or sigma_ENU=None to disable base "
+                "error propagation entirely."
+            )
 
     if corr_ENU is None:
         corr_ENU = np.eye(3)
@@ -195,15 +209,21 @@ def build_base_position(
     else:
         lon_dd, lat_dd, hgt = _ECEF_TO_LLH.transform(X, Y, Z)
 
-    # Covariance is defined in ENU (how datasheets state it) and converted to
-    # ECEF (how the pipeline combines it).
-    cov_ENU = np.diag(sigma_ENU) @ corr_ENU @ np.diag(sigma_ENU)
-    cov_ECEF = ENU2ECEF_vec(cov_enu=cov_ENU, lat_deg=lat_dd, lon_deg=lon_dd)
-    sigma_ECEF = np.sqrt(np.diag(cov_ECEF))
-    # Recompute rather than reuse the input, so the returned ENU covariance is
-    # the one actually implied by what the pipeline will consume.
-    cov_ENU_out = ECEF2ENU_vec(cov_ecef=cov_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
-    sigma_ENU_out = np.sqrt(np.diag(cov_ENU_out))
+    if uncertainty_available:
+        # Covariance is defined in ENU (how datasheets state it) and converted
+        # to ECEF (how the pipeline combines it).
+        cov_ENU = np.diag(sigma_ENU) @ corr_ENU @ np.diag(sigma_ENU)
+        cov_ECEF = ENU2ECEF_vec(cov_enu=cov_ENU, lat_deg=lat_dd, lon_deg=lon_dd)
+        sigma_ECEF = np.sqrt(np.diag(cov_ECEF))
+        # Recompute rather than reuse the input, so the returned ENU covariance
+        # is the one actually implied by what the pipeline will consume.
+        cov_ENU_out = ECEF2ENU_vec(cov_ecef=cov_ECEF, lat_deg=lat_dd,
+                                   lon_deg=lon_dd)
+        sigma_ENU_out = np.sqrt(np.diag(cov_ENU_out))
+    else:
+        # Deliberately None rather than zero: downstream treats None as
+        # "do not propagate", whereas zero would claim a perfect base.
+        cov_ECEF = cov_ENU_out = sigma_ECEF = sigma_ENU_out = None
 
     if print_report:
         epoch_note = f" @ {epoch}" if epoch else " (epoch not stated)"
@@ -212,9 +232,17 @@ def build_base_position(
         logger.info(f"Base ECEF    : ({X:.4f}, {Y:.4f}, {Z:.4f}) m")
         logger.info(f"Base LLH     : ({lat_dd:.7f}°, {lon_dd:.7f}°, "
                     f"{hgt:.4f} m ellipsoidal)")
-        logger.info(f"Base 1σ ENU  : E={sigma_ENU_out[0]*100:.2f} cm, "
-                    f"N={sigma_ENU_out[1]*100:.2f} cm, "
-                    f"U={sigma_ENU_out[2]*100:.2f} cm  [user-supplied]")
+        if uncertainty_available:
+            logger.info(f"Base 1σ ENU  : E={sigma_ENU_out[0]*100:.2f} cm, "
+                        f"N={sigma_ENU_out[1]*100:.2f} cm, "
+                        f"U={sigma_ENU_out[2]*100:.2f} cm  [user-supplied]")
+        else:
+            logger.warning(
+                "No base uncertainty supplied. Base error propagation is "
+                "DISABLED for this run.")
+            logger.warning(
+                "Reported sigmas will cover the PPK solution only and will "
+                "understate the true uncertainty of the camera positions.")
         if not epoch:
             logger.warning("No epoch stated. For plate-fixed frames such as "
                            "NAD83(CSRS) this leaves the coordinate ambiguous at "
@@ -235,6 +263,7 @@ def build_base_position(
         "lat_dd": float(lat_dd),
         "lon_dd": float(lon_dd),
         "hgt": float(hgt),
+        "uncertainty_available": uncertainty_available,
         "cov_PPP_ECEF": cov_ECEF,
         "cov_PPP_ENU": cov_ENU_out,
         "PPP_sigma_ECEF": sigma_ECEF,

@@ -8,6 +8,7 @@ from dji_geotagger.config.import_config import override_rtklib_config
 from dji_geotagger.core.pos_parser import pos2df
 from dji_geotagger.tools.logging_setup import get_logger
 from dji_geotagger.tools.progress import as_progress
+from dji_geotagger.ppk.time_check import check_time_overlap
 
 logger = get_logger(__name__)
 
@@ -25,7 +26,8 @@ def process_ppk(
     overwrite: bool = False,
     base_position: dict = None,
     auto_install: bool = None,
-    progress=None
+    progress=None,
+    check_overlap: bool = True
     ) -> pd.DataFrame:
     """
     Run a single RTKLIB PPK solution (rnx2rtkp) for one rover observation file and
@@ -95,6 +97,11 @@ def process_ppk(
         the console but only when running interactively. Non-interactive
         callers such as a GUI get an error instead of a hung prompt; see
         :func:`~dji_geotagger.tools.install_RTKLIB.get_rtklib_executable`.
+    check_overlap : bool, default True
+        Verify that the base station observed while the rover was flying,
+        before invoking RTKLIB. Raises when they do not overlap. Set False
+        only if you have already checked, or deliberately want to attempt a
+        solve anyway.
 
     Returns
     -------
@@ -134,6 +141,12 @@ def process_ppk(
 
     progress = as_progress(progress)
     progress.check()
+
+    # PPK is differential, so a rover epoch with no simultaneous base data
+    # cannot be resolved. Checked here rather than after the solve: RTKLIB
+    # would not refuse the job, it would just return a shorter trajectory.
+    if check_overlap:
+        check_time_overlap(base_obs, rover_obs)
 
     # Check rnx2rtkp
     rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB, auto_install)

@@ -196,6 +196,11 @@ def interpolate_pos_at_exposure(
 
     # Propagate coordinate system label from PPK trajectory
     exposure_df["coord_sys"] = pos_df["coord_sys"].iloc[0]
+    # Provenance of the reference frame. Needed by transform_coordinates(),
+    # and worth keeping in the output so a result can be traced later.
+    for col in ("epoch", "epoch_decimal_year", "base_source"):
+        if col in pos_df.columns:
+            exposure_df[col] = pos_df[col].iloc[0]
 
     logger.info(f"Interpolated PPK position for {len(exposure_df)} exposure epochs")
     return exposure_df
@@ -282,7 +287,7 @@ def format_output(df: pd.DataFrame, full_output: bool = False) -> pd.DataFrame:
 
     if not full_output:
         keep_cols = [
-            'FileName', 'UTCAtExposure', 'coord_sys',
+            'FileName', 'UTCAtExposure', 'coord_sys', 'epoch',
             'cam_lat', 'cam_lon', 'cam_h',
             'cam_X', 'cam_Y', 'cam_Z',
             'sigma_E', 'sigma_N', 'sigma_U',

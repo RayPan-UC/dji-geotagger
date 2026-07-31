@@ -6,7 +6,10 @@ from dji_geotagger.core.mrk_parser import mrk2df
 from dji_geotagger.core.xml_parser import parse_img_dir
 from dji_geotagger.core.camera_pos_solver import compute_camera_position
 from dji_geotagger.ppk.base_position import resolve_base_position
-from dji_geotagger.tools.progress import as_progress
+from dji_geotagger.tools.progress import as_progress, OperationCancelled
+from dji_geotagger.tools.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 def geotag(
@@ -16,7 +19,8 @@ def geotag(
     sum_file_path: str = None,
     full_output: bool = False,
     base_position: dict = None,
-    progress=None
+    progress=None,
+    on_flight_error: str = "skip"
 ) -> pd.DataFrame:
     """
     High-level API: run an end-to-end DJI geotagging pipeline for one or more flight folders.
@@ -82,19 +86,45 @@ def geotag(
         steps too - the RTKLIB solve and the CSRS-PPP poll are supervised
         rather than simply awaited.
 
+    on_flight_error : {"skip", "raise"}, default "skip"
+        What to do when one flight fails.
+
+        ``skip``
+            Log the failure, carry on with the remaining flights, and record
+            what was lost in ``df.attrs["failed_flights"]``. Raises only if
+            *every* flight failed.
+        ``raise``
+            Abort the whole run on the first failure.
+
+        The default is ``skip`` because a run covers many flights and takes
+        minutes each: losing an hour of completed work because flight 7 has no
+        .MRK file helps nobody. Cancellation is never swallowed - it is the
+        caller's decision about the whole run, not a property of one flight.
+
     Returns
     -------
     pd.DataFrame
-        Concatenated camera center table for all flights, with an extra column:
+        Concatenated camera center table for all successful flights, with an
+        extra column:
+
         - flight : the folder name (Path.stem) for grouping / filtering
+
+        Two entries are set in ``df.attrs`` so an incomplete result announces
+        itself without the caller having to read the log:
+
+        - ``failed_flights`` : list of ``(flight_name, reason)``
+        - ``n_flights_requested`` : how many were asked for
 
     Raises
     ------
-    IndexError
-        If a flight folder does not contain required "*_PPKRAW.bin" or "*.MRK" files
-        (due to direct list indexing in the current implementation).
+    ValueError
+        If `on_flight_error` is not one of the accepted values.
+    RuntimeError
+        If no flight was processed successfully.
     FileNotFoundError / RuntimeError
-        Propagated from lower-level functions (e.g., RTKLIB execution, missing base files, parsing errors).
+        Propagated from lower-level functions when
+        ``on_flight_error="raise"`` (e.g. RTKLIB execution, missing base
+        files, parsing errors).
     """
     progress = as_progress(progress)
     progress.update("start", "Resolving base station position")
@@ -111,7 +141,13 @@ def geotag(
             print_report=True,
         )
 
+    if on_flight_error not in ("skip", "raise"):
+        raise ValueError(
+            f"[ERROR] on_flight_error must be 'skip' or 'raise', "
+            f"got {on_flight_error!r}")
+
     results = []
+    failures = []
     n_flights = len(flight_folders)
 
     for flight_index, flight_dir in enumerate(flight_folders, start=1):
@@ -123,37 +159,52 @@ def geotag(
                                   f"{flight_dir.name}",
                         current=flight_index - 1, total=n_flights)
 
-        # Step 1+2: Rover RINEX + PPK
-        rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
-        if not rover_raws:
-            raise FileNotFoundError(f"No *_PPKRAW.bin found in {flight_dir}")
-        rover_raw = rover_raws[0]
-        rover_obs, _ = raw2rinex(rover_raw, progress=progress)
-        pos_df = process_ppk(
-                        base_obs,
-                        base_nav,
-                        rover_obs=rover_obs,
-                        sum_file_path=sum_file_path,
-                        base_position=base_position,
-                        progress=progress)
+        try:
+            # Step 1+2: Rover RINEX + PPK
+            rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
+            if not rover_raws:
+                raise FileNotFoundError(
+                    f"No *_PPKRAW.bin found in {flight_dir}")
+            rover_raw = rover_raws[0]
+            rover_obs, _ = raw2rinex(rover_raw, progress=progress)
+            pos_df = process_ppk(
+                            base_obs,
+                            base_nav,
+                            rover_obs=rover_obs,
+                            sum_file_path=sum_file_path,
+                            base_position=base_position,
+                            progress=progress)
 
-        # Step 3: MRK
-        mrks = list(flight_dir.glob("*.MRK"))
-        if not mrks:
-            raise FileNotFoundError(f"No *.MRK found in {flight_dir}")
-        mrk = mrks[0]
-        mrk_df = mrk2df(mrk)
+            # Step 3: MRK
+            mrks = list(flight_dir.glob("*.MRK"))
+            if not mrks:
+                raise FileNotFoundError(f"No *.MRK found in {flight_dir}")
+            mrk = mrks[0]
+            mrk_df = mrk2df(mrk)
 
-        # Step 4: Image XML
-        img_df = parse_img_dir(flight_dir, progress=progress)
+            # Step 4: Image XML
+            img_df = parse_img_dir(flight_dir, progress=progress)
 
-        # Step 5: Camera position
-        result = compute_camera_position(
-            pos_df=pos_df,
-            mrk_df=mrk_df,
-            img_df=img_df,
-            full_output=full_output,
-        )
+            # Step 5: Camera position
+            result = compute_camera_position(
+                pos_df=pos_df,
+                mrk_df=mrk_df,
+                img_df=img_df,
+                full_output=full_output,
+            )
+        except OperationCancelled:
+            # A cancel is the user's decision about the whole run, not a
+            # property of this flight. Never swallowed.
+            raise
+        except Exception as exc:
+            if on_flight_error == "raise":
+                raise
+            logger.error(f"Flight {flight_dir.name} failed and was skipped: "
+                         f"{type(exc).__name__}: {exc}")
+            failures.append((flight_dir.stem, f"{type(exc).__name__}: {exc}"))
+            progress.update("flight", f"Skipped {flight_dir.name}",
+                            current=flight_index, total=n_flights)
+            continue
 
         # flight name
         result["flight"] = flight_dir.stem
@@ -161,8 +212,21 @@ def geotag(
         progress.update("flight", f"Finished {flight_dir.name}",
                         current=flight_index, total=n_flights)
 
+    if failures:
+        logger.warning(
+            f"{len(failures)} of {n_flights} flights failed and were skipped:")
+        for name, why in failures:
+            logger.warning(f"  {name}: {why}")
+
     if not results:
-        raise RuntimeError("No flights were successfully processed.")
+        detail = "\n".join(f"  {n}: {w}" for n, w in failures)
+        raise RuntimeError(
+            "[ERROR] No flights were successfully processed."
+            + (f"\n{detail}" if detail else ""))
 
     final_df = pd.concat(results, ignore_index=True)
+    # Failures travel with the result so a caller does not have to scrape the
+    # log to find out the output is incomplete.
+    final_df.attrs["failed_flights"] = failures
+    final_df.attrs["n_flights_requested"] = n_flights
     return final_df

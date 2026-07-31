@@ -100,6 +100,7 @@ def pos2df(
 
     cov_PPP_ECEF = None
     coord_sys = None
+    epoch = epoch_decimal_year = base_source = None
     if base_error_propagation_on:
         # Prefer a base position the caller already resolved: it may come from
         # a source other than a .sum file (manually entered coordinates), and
@@ -108,6 +109,12 @@ def pos2df(
             sum_file_parser(base_obs=base_obs, sum_file_path=sum_file_path)
         cov_PPP_ECEF = PPP_dict.get("cov_PPP_ECEF")
         coord_sys =  PPP_dict.get("coord_sys")
+        # Carried through so downstream coordinate transformation knows which
+        # epoch these coordinates refer to. A frame without an epoch cannot be
+        # transformed rigorously.
+        epoch = PPP_dict.get("epoch")
+        epoch_decimal_year = PPP_dict.get("epoch_decimal_year")
+        base_source = PPP_dict.get("source")
 
     # Check pos file validation (exist/ECEF/GPST/deciminal>=6)
     validate_pos_file(pos_file)
@@ -118,6 +125,7 @@ def pos2df(
 
     data_started = False
     records = []
+    n_indefinite = 0
 
     for line in lines:
         if not data_started:
@@ -151,14 +159,29 @@ def pos2df(
             cov_total_ENU = ECEF2ENU_vec(cov_total_ECEF, lon_deg=lon_dd, lat_deg=lat_dd) # Covariance
 
             # sigma
-            sigma_total_ECEF = np.sqrt(np.diag(cov_total_ECEF)) # 1-sigma in ECEF (m)
-            sigma_total_ENU = np.sqrt(np.diag(cov_total_ENU)) # 1-sigma in ENU (m)
+            #
+            # RTKLIB's signed-sqrt correlation terms occasionally imply a
+            # covariance that is not positive semi-definite, which rotates
+            # into a negative ENU variance and hence a NaN sigma. Adding the
+            # base covariance usually masks this, so it only becomes visible
+            # when base error propagation is off. NaN is the honest answer -
+            # the uncertainty for that epoch really is unknown - but the raw
+            # numpy warning is not intelligible, so it is counted and reported
+            # once instead.
+            with np.errstate(invalid="ignore"):
+                sigma_total_ECEF = np.sqrt(np.diag(cov_total_ECEF)) # 1-sigma in ECEF (m)
+                sigma_total_ENU = np.sqrt(np.diag(cov_total_ENU)) # 1-sigma in ENU (m)
+            if np.any(np.isnan(sigma_total_ENU)) or np.any(np.isnan(sigma_total_ECEF)):
+                n_indefinite += 1
 
             # Save as dict in list
             records.append({
                     "GPS_week": gps_week,
                     "GPS_time": gps_tow,
                     "coord_sys": coord_sys,
+                    "epoch": epoch,
+                    "epoch_decimal_year": epoch_decimal_year,
+                    "base_source": base_source,
                     "X": x,
                     "Y": y,
                     "Z": z,
@@ -175,6 +198,15 @@ def pos2df(
             logger.error(f"Line: {line.strip()} → {e}")
             continue
     
+    if n_indefinite:
+        pct = 100.0 * n_indefinite / max(1, len(records))
+        logger.warning(
+            f"{n_indefinite} of {len(records)} epochs ({pct:.1f}%) have an "
+            f"indefinite RTKLIB covariance; their sigmas are NaN.")
+        logger.warning(
+            "This is a property of the PPK solution, not of the base "
+            "position. Affected images will carry NaN uncertainty.")
+
     # Save as Dataframe
     df = pd.DataFrame(records)
     logger.info(f"Parsed {pos_file.name} ({len(df)} records)")
