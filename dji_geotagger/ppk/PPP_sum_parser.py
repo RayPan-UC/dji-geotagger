@@ -121,10 +121,9 @@ def sum_file_parser(
     Parse CSRS-PPP .sum file to extract final estimated ECEF position and covariance matrix.
 
     **Validation Note:**
-    Compared PPP report with pymap3d transformation results:
-    - Base LLH (PPP)     : 55.2942365333°, -114.6254905917°, 560.7136000000 m
-    - Base LLH (pymap3d) : 55.2942365320°, -114.6254905912°, 560.7135461102 m
-    - Difference: sub-millimeter level (both methods absolutely reliable)
+    The geodetic coordinates reported in the .sum header were compared against
+    converting the .sum's own ECEF coordinates with pymap3d. The two agree at
+    the sub-millimetre level, so either may be used interchangeably.
 
     Parameters
     ----------

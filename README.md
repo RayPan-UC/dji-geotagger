@@ -128,8 +128,8 @@ base_obs, base_nav = dgt.raw2rinex(
 ppp_sum_file = r"DRTK3/PPP/DRTK3_0038_20250730102537.sum"
 
 flight_folders = [
-    r"P1/DJI_202507301227_011_SynopticSite3",
-    r"P1/DJI_202507301227_012_SynopticSite3",
+    r"P1/DJI_202507301227_011_LOCATION",
+    r"P1/DJI_202507301227_012_LOCATION",
 ]
 
 # === Process each flight manually ===
@@ -205,8 +205,8 @@ if all_results:
     )
     
     # === Export ===
-    geotag_df.to_csv("SynopticSite3_manual.csv", index=False)
-    print(f"✓ Results saved to SynopticSite3_manual.csv")
+    geotag_df.to_csv("LOCATION_manual.csv", index=False)
+    print(f"✓ Results saved to LOCATION_manual.csv")
 else:
     print("No flights were successfully processed.")
 ```

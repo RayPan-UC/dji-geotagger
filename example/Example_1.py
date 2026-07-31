@@ -33,7 +33,7 @@ base_position = dgt.resolve_base_position(
 # base_position = dgt.resolve_base_position(
 #     mode="manual",
 #     manual_kwargs=dict(
-#         lat_dd=55.2942365, lon_dd=-114.6254906, hgt=560.7136,
+#         lat_dd=51.0000000, lon_dd=-114.0000000, hgt=1000.0000,
 #         coord_sys="NAD83(CSRS)", epoch="2010.0",
 #         sigma_ENU=(0.010, 0.010, 0.020),   # metres, 1-sigma
 #     ),
