@@ -10,21 +10,29 @@ base_obs, base_nav = dgt.raw2rinex(r"DRTK3\DRTK3_0038_20250730102537_XXXXX.dat",
 #  Resolving it here, rather than letting geotag() do it, means you can check
 #  the coordinates before committing to a run that takes minutes per flight.
 
-# (a) Existing CSRS-PPP .sum file - what you downloaded from the website.
-#     Omit sum_file_path to auto-detect a .sum sitting next to your .obs.
-base_position = dgt.resolve_base_position(
-    mode="sum",
-    sum_file_path=r"DRTK3\PPP\DRTK3_0038_20250730102537_XXXXX.sum",
-)
-
-# (b) Submit to CSRS-PPP automatically and fetch the .sum back.
+# (a) Submit to CSRS-PPP automatically and fetch the .sum back. Default.
 #     Needs a free CSRS account; the email is the only credential involved.
 #     Use sysref="NAD83" for Canadian deliverables, "ITRF" for the global frame.
+#
+#     To deliver at a fixed epoch, ask for it HERE - this is the only step in
+#     the pipeline that can propagate one, and it also returns the
+#     propagation uncertainty:
+#         ppp_kwargs={"sysref": "NAD83", "nad83_epoch": "NAD83_20100101"}
+#     Note that "NAD83_CURR" does NOT propagate; it stays at the observation
+#     epoch.
+base_position = dgt.resolve_base_position(
+    mode="online",
+    base_obs=base_obs,
+    email="you@example.com",
+    ppp_kwargs={"process_type": "Static", "sysref": "ITRF"},
+)
+
+# (b) Existing CSRS-PPP .sum file - what you downloaded from the website.
+#     Use this if the submission fails, or to re-run without resubmitting.
+#     Omit sum_file_path to auto-detect a .sum sitting next to your .obs.
 # base_position = dgt.resolve_base_position(
-#     mode="online",
-#     base_obs=base_obs,
-#     email="you@example.com",
-#     ppp_kwargs={"process_type": "Static", "sysref": "ITRF"},
+#     mode="sum",
+#     sum_file_path=r"DRTK3\PPP\DRTK3_0038_20250730102537_XXXXX.sum",
 # )
 
 # (c) Coordinates you already know - a published control point or CORS station.

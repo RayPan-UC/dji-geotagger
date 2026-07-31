@@ -8,12 +8,13 @@ This Python library enables centimetre-level camera geotagging by combining PPK 
 
 - Convert raw GNSS logs (`.bin`, `.dat`) to RINEX format using RTKLIB `convbin`
 - Download precise ephemeris data (SP3/CLK) automatically from IGS
-- Perform precise point positioning (PPK) with optional base station refinement from CSRS-PPP `.sum` files
-- Parse DJI `.MRK` gimbal offset files and interpolate corrections to camera center (ECEF)
-- Match images by GPS time, apply PPK + MRK corrections with full covariance propagation
-- Export geotagged results in ECEF/ENU/UTM with estimated 3D precision (1-sigma)
+- Run differential PPK (rover against base) with RTKLIB `rnx2rtkp`
+- Resolve the base station position three ways: submit to CSRS-PPP automatically, read an existing `.sum`, or enter known coordinates
+- Parse DJI `.MRK` gimbal offset files and apply the lever arm to the camera centre (ECEF)
+- Match images by GPS time and propagate full 3×3 covariance from both the rover and the base
+- Transform to any CRS with guards against PROJ's silent failure modes
+- Batch processing of multiple flight folders, with per-flight error isolation
 - Support for DJI P1, M300, and other RTK-enabled drones
-- Batch processing of multiple flight folders
 
 ## Installation
 
@@ -32,10 +33,12 @@ pip install -e .
 
 - Python ≥ 3.9
 - `pillow` - Image processing and EXIF reading
+- `defusedxml` - Required by Pillow's `getxmp()`; without it XMP is silently unreadable and every image yields no metadata
 - `pandas` - Data manipulation and CSV export
 - `numpy` - Numerical computations
+- `pyproj` - Coordinate reference systems and transformations
 - `tqdm` - Progress bars
-- `requests` - HTTP requests for ephemeris download
+- `requests` - HTTP requests for ephemeris download and CSRS-PPP submission
 - `georinex` - RINEX file parsing
 - `astropy` - Time and coordinate utilities
 - `pymap3d` - Geodetic coordinate conversions
@@ -44,310 +47,239 @@ pip install -e .
 
 ## Workflow Overview
 
-1. **Convert raw GNSS to RINEX** - Convert base station (`.dat`) and rover (`.bin`) logs to standard RINEX format
-2. **Optional: Download precise ephemeris** - Automatic IGS SP3/CLK download based on observation dates
-3. **Optional: Resolve base station position** - Use CSRS-PPP `.sum` file or manual ECEF coordinates
-4. **Run PPK batch processing** - Execute `rnx2rtkp` for each flight folder
-5. **Parse image metadata** - Extract capture time, gimbal attitude, and camera orientation from EXIF/XMP
-6. **Parse and interpolate MRK** - Convert gimbal offset vectors from NED → ENU → ECEF
-7. **Compute geotagged positions** - Match images to PPK solutions, apply MRK offset, propagate covariance
-8. **Export CSV** - Generate timestamped CSV with positions, attitudes, and uncertainties
+1. **Convert raw GNSS to RINEX** - Base station (`.dat`) and rover (`.bin`) logs to standard RINEX
+2. **Resolve the base station position** - CSRS-PPP (online or from a `.sum`), or known coordinates
+3. **Run PPK batch processing** - `rnx2rtkp` per flight folder, after checking base/rover time overlap
+4. **Parse image metadata** - Capture time, gimbal attitude and camera orientation from EXIF/XMP
+5. **Parse and interpolate MRK** - Gimbal offset vectors from NED → ECEF
+6. **Compute geotagged positions** - Match images to PPK solutions, apply the lever arm, propagate covariance
+7. **Optional: transform coordinates** - Datum transformation and projection for delivery
+8. **Export CSV**
 
-## Example Usage
-
-### Basic Workflow
+## Quick Start
 
 ```python
 import dji_geotagger as dgt
 
 # === 1. Convert GNSS raw data to RINEX ===
 base_obs, base_nav = dgt.raw2rinex(
-    input_path=r"path/to/base/DRTK3_20250730.dat",
-    antenna_height_in_meter=2.0
+    input_path=r"DRTK3/DRTK3_20250730.dat",
+    antenna_height_in_meter=2.0,
 )
 
-# === 2. (Optional) Use PPP base position from CSRS-PPP ===
-ppp_sum_file = r"path/to/DRTK3_20250730.sum"  # or leave as None for manual base position
+# === 2. Resolve the base station position ===
+#     Submitted to CSRS-PPP and fetched back automatically. A free CSRS
+#     account is needed; the email is the only credential involved.
+base_position = dgt.resolve_base_position(
+    mode="online",
+    base_obs=base_obs,
+    email="you@example.com",
+    ppp_kwargs={"process_type": "Static", "sysref": "ITRF"},
+)
 
 # === 3. Define flight folders to process ===
 flight_folders = [
     r"P1/DJI_202507301227_011_LOCATION",
     r"P1/DJI_202507301227_012_LOCATION",
-    r"P1/DJI_202507301256_013_LOCATION"
+    r"P1/DJI_202507301256_013_LOCATION",
 ]
 
-# === 4. Process all flights at once ===
+# === 4. Process all flights ===
 geotag_df = dgt.geotag(
     flight_folders=flight_folders,
     base_obs=base_obs,
     base_nav=base_nav,
-    sum_file_path=ppp_sum_file,  # Optional CSRS-PPP base position
-    output_dir="output/geotags"
+    base_position=base_position,
 )
 
-# === 5. Save to CSV ===
+# === 5. Save ===
 geotag_df.to_csv("geotagged_results.csv", index=False)
 print(f"Geotagged {len(geotag_df)} images")
 ```
 
-### Advanced: Manual Base Station Position
+Resolving the base position before calling `geotag()` — rather than letting
+`geotag()` do it — means the coordinates can be checked before committing to a
+run that takes minutes per flight, and a bad `.sum` fails immediately instead
+of after the first PPK solve.
 
-If you don't have a CSRS-PPP `.sum` file, provide base station coordinates manually:
+## Base Station Position
+
+All three sources return the same structure, so the rest of the script is
+identical whichever is used.
+
+**Online CSRS-PPP submission** — submits the RINEX, polls, and parses the
+returned `.sum`:
 
 ```python
-import dji_geotagger as dgt
-
-user_config = {
-    'ant2-postype': 'xyz',
-    'ant2-pos1': -2418456.789,  # X (metres), ECEF
-    'ant2-pos2':  5385936.123,  # Y (metres), ECEF
-    'ant2-pos3':  2405716.456,  # Z (metres), ECEF
-}
-
-geotag_df = dgt.geotag(
-    flight_folders=flight_folders,
+base_position = dgt.resolve_base_position(
+    mode="online",
     base_obs=base_obs,
-    base_nav=base_nav,
-    user_conf=user_config  # Use manual base position instead of sum_file_path
+    email="you@example.com",
+    ppp_kwargs={"process_type": "Static", "sysref": "ITRF"},
 )
 ```
 
-### Step-by-Step: Manual Control Over Each Flight
-
-For detailed control and debugging of the geotagging pipeline for each flight:
+**Existing `.sum` file** — for re-running without resubmitting. Omit
+`sum_file_path` to auto-detect a `.sum` sitting next to the `.obs`:
 
 ```python
-import dji_geotagger as dgt
-from pathlib import Path
-
-# === Setup ===
-base_obs, base_nav = dgt.raw2rinex(
-    r"DRTK3/DRTK3_0038_20250730102537.dat", 
-    antenna_height_in_meter=2.0
+base_position = dgt.resolve_base_position(
+    mode="sum",
+    sum_file_path=r"DRTK3/PPP/DRTK3_20250730.sum",
 )
-ppp_sum_file = r"DRTK3/PPP/DRTK3_0038_20250730102537.sum"
-
-flight_folders = [
-    r"P1/DJI_202507301227_011_LOCATION",
-    r"P1/DJI_202507301227_012_LOCATION",
-]
-
-# === Process each flight manually ===
-all_results = []
-
-for flight_dir in flight_folders:
-    flight_dir = Path(flight_dir)
-    print(f"\n=== Processing {flight_dir.stem} ===")
-    
-    # Step 1: Find and convert rover GNSS raw → RINEX
-    rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
-    if not rover_raws:
-        print(f"No *_PPKRAW.bin found in {flight_dir}, skipping...")
-        continue
-    
-    rover_raw = rover_raws[0]
-    print(f"Converting {rover_raw.name}...")
-    rover_obs, rover_nav = dgt.raw2rinex(rover_raw)
-    
-    # Step 2: Run PPK solver
-    print(f"Running PPK for {flight_dir.stem}...")
-    pos_df = dgt.process_ppk(
-        base_obs=base_obs,
-        base_nav=base_nav,
-        rover_obs=rover_obs,
-        sum_file_path=ppp_sum_file
-    )
-    print(f"✓ PPK solution: {len(pos_df)} poses")
-    
-    # Step 3: Parse MRK gimbal offsets
-    mrks = list(flight_dir.glob("*.MRK"))
-    if not mrks:
-        print(f"No *.MRK found in {flight_dir}, skipping...")
-        continue
-    
-    mrk = mrks[0]
-    print(f"Parsing {mrk.name}...")
-    mrk_df = dgt.mrk2df(mrk)
-    print(f"✓ MRK data: {len(mrk_df)} exposure records")
-    
-    # Step 4: Parse image metadata (XMP/EXIF)
-    print(f"Parsing image metadata from {flight_dir.name}...")
-    img_df = dgt.parse_img_dir(flight_dir)
-    print(f"✓ Images found: {len(img_df)}")
-    
-    # Step 5: Compute camera center positions
-    print(f"Computing geotagged camera positions...")
-    result = dgt.compute_camera_position(
-        pos_df=pos_df,
-        mrk_df=mrk_df,
-        img_df=img_df,
-        full_output=False  # Set to True for all intermediate columns
-    )
-    result["flight"] = flight_dir.stem
-    print(f"✓ Geotagged {len(result)} images")
-    
-    all_results.append(result)
-
-# === Combine all flights ===
-if all_results:
-    geotag_df = dgt.pd.concat(all_results, ignore_index=True)
-    print(f"\n{'='*50}")
-    print(f"Total geotagged images: {len(geotag_df)}")
-    print(f"Flights processed: {geotag_df['flight'].nunique()}")
-    
-    # === Transform to UTM ===
-    print(f"\nTransforming to UTM Zone 12N...")
-    geotag_df = dgt.transform_coordinates(
-        geotag_df,
-        target_crs=32612,
-        cov_ecef2enu=True,
-        drop_original=False
-    )
-    
-    # === Export ===
-    geotag_df.to_csv("LOCATION_manual.csv", index=False)
-    print(f"✓ Results saved to LOCATION_manual.csv")
-else:
-    print("No flights were successfully processed.")
 ```
 
-### Debugging: Inspect Intermediate Results
+**Known coordinates** — a published control point or CORS station. The height
+must be **ellipsoidal**, not orthometric; orthometric heights are refused
+rather than silently converted:
 
 ```python
-import dji_geotagger as dgt
-import pandas as pd
-
-# After running PPK
-print("PPK Solution Statistics:")
-print(f"  X range: {pos_df['x'].min():.2f} to {pos_df['x'].max():.2f} m")
-print(f"  Y range: {pos_df['y'].min():.2f} to {pos_df['y'].max():.2f} m")
-print(f"  Z range: {pos_df['z'].min():.2f} to {pos_df['z'].max():.2f} m")
-print(f"  Std Dev X: {pos_df['sx'].mean():.4f} m")
-print(f"  Std Dev Y: {pos_df['sy'].mean():.4f} m")
-print(f"  Std Dev Z: {pos_df['sz'].mean():.4f} m")
-
-# Inspect MRK data
-print("\nMRK Gimbal Offsets (first 5 records):")
-print(mrk_df[['gps_week', 'gps_tow', 'offset_x', 'offset_y', 'offset_z']].head())
-
-# Inspect image metadata
-print("\nImage Metadata (first 5 images):")
-print(img_df[['file_name', 'gps_tow', 'roll', 'pitch', 'yaw']].head())
-
-# Inspect final geotagged results
-print("\nGeotagged Results (first 5 images):")
-print(result[['file_name', 'x_ecef', 'y_ecef', 'z_ecef', 'sd_x_ecef', 'sd_y_ecef', 'sd_z_ecef']].head())
+base_position = dgt.resolve_base_position(
+    mode="manual",
+    manual_kwargs=dict(
+        lat_dd=51.0000000, lon_dd=-114.0000000, hgt=1000.0000,
+        coord_sys="NAD83(CSRS)", epoch="2010.0",
+        sigma_ENU=(0.010, 0.010, 0.020),   # metres, 1-sigma
+    ),
+)
 ```
+
+`sigma_ENU` is required, and cannot simply be left out. To report rover-only
+precision, pass it explicitly as `None`:
+
+```python
+manual_kwargs=dict(..., sigma_ENU=None)   # disables base error propagation
+```
+
+It is never treated as zero — a base station with no stated uncertainty is not
+the same as a perfect one, and the difference has to be stated deliberately
+rather than by omission.
+
+### Delivering at a fixed epoch
+
+A coordinate is meaningless without its epoch: in a plate-fixed frame such as
+NAD83(CSRS) the North American plate moves 1–2 cm/yr. If the deliverable must
+be at a fixed epoch (2010.0, say), ask CSRS-PPP for it at this step:
+
+```python
+ppp_kwargs={"sysref": "NAD83", "nad83_epoch": "NAD83_20100101"}
+```
+
+This is the **only** step in the pipeline that can propagate an epoch — doing
+it later needs the NAD83 v8.0 velocity grid, which PROJ does not distribute.
+CSRS-PPP also returns the propagation uncertainty, which for a 15.6-year
+propagation was 0.75–1.10 cm (1-sigma), the same order as the PPP solution
+itself. That term is folded into the reported covariance automatically.
+
+Note that `"NAD83_CURR"` does **not** propagate; it stays at the observation
+epoch.
+
+## Coordinate Transformation
+
+`geotag()` leaves its output in whatever frame CSRS-PPP solved in, tagged with
+the reference epoch. Keep that file: the frame + epoch pair is lossless, so any
+other CRS can still be derived from it later.
+
+```python
+utm_df = dgt.transform_coordinates(geotag_df, 22811)   # NAD83(CSRS)v8 / UTM 11N
+utm_df.to_csv("results_utm11n.csv", index=False)
+
+print(utm_df.attrs["transform"])   # provenance: operation, accuracy, shift
+```
+
+Uncertainties are rotated into the target frame using a numerical Jacobian, so
+meridian convergence and the point scale factor are accounted for without
+per-projection formulas.
+
+### Use versioned EPSG codes
+
+`EPSG:2956` and `EPSG:22812` are both named "NAD83(CSRS) / UTM zone 12N", but
+the first names no realization. PROJ then cannot find a rigorous operation and
+falls back to a *ballpark* shift, which returns the coordinates essentially
+unchanged — discarding the entire 1.63 m datum shift with no error and no
+symptom. The versioned NAD83(CSRS) UTM codes run `222xx` (v2) through `228xx`
+(v8), where `xx` is the zone.
+
+Where EPSG has no versioned code, build the CRS instead:
+
+```python
+itrf_utm    = dgt.make_utm_crs(11, 9988)                # no ITRF2020 UTM exists
+alberta_3tm = dgt.rebase_projected_crs(3780, 10412)     # 3TM grid, v8 datum
+```
+
+### What it refuses, and why
+
+PROJ degrades rather than raising. Three silent failures are refused by
+default, each with its own opt-out:
+
+| Refused | Measured cost if allowed | Override |
+|---|---|---|
+| Ballpark fallback (no rigorous transformation) | full datum shift lost | `allow_ballpark=True` |
+| Datum ensemble target, e.g. plain WGS 84 | 1.60 m | `allow_datum_ensemble=True` |
+| Missing epoch | 0.29 m | supply `source_epoch=` |
+
+The datum-ensemble case is the least obvious. "WGS 84" is an ensemble with
+~2 m internal accuracy, so PROJ has several candidate operations whose stated
+accuracies all cluster near 2 m and picks the numerically smallest — which at
+the reference site routed through NAD83(2011) and shifted the point 1.60 m,
+flagged as neither ballpark nor low-accuracy.
+
+There is also rarely a reason to ask for it: WGS 84 (G2296) is aligned to
+ITRF2020 at the centimetre level, so the `cam_lat`/`cam_lon` already produced
+by `geotag()` *are* WGS 84 — more precisely than WGS 84's own definition.
+
+### Verification
+
+Checked against CSRS-PPP's own answers for the same base station, by
+submitting the same RINEX with `sysref="ITRF"` and `sysref="NAD83"`:
+
+| Step | Agreement |
+|---|---|
+| Datum transformation (EPSG:9988 → 10412) vs a native NAD83 solve | 0.055 mm |
+| Projection vs the `PRJ` line in the `.sum`, both frames | exact to the printed mm |
+| Jacobian scale factor vs the `.sum`'s `SCALE_COMBINED` | 1e-7 |
 
 ## Output Format
 
-The output CSV contains the following columns (aligned with your actual flight data):
+By default `geotag()` returns a compact table. Pass `full_output=True` for all
+intermediate columns (MRK fields, EXIF/XMP metadata, aircraft and gimbal
+attitude, the full covariance matrices).
 
-### Sequence & Time Information
+### Default columns
+
 | Column | Description |
 |--------|-------------|
-| `seq` | Sequence number of the image |
-| `GPS_time` | GPS time-of-week (seconds) |
-| `GPS_week` | GPS week number |
-| `UTCAtExposure` | UTC datetime of exposure |
 | `FileName` | Image filename |
+| `UTCAtExposure` | UTC datetime of exposure |
+| `coord_sys` | Reference frame (e.g. `IGb20`) |
+| `epoch` | Reference epoch of the coordinates |
+| `cam_lat`, `cam_lon` | Camera centre latitude/longitude (decimal degrees) |
+| `cam_h` | Camera centre **ellipsoidal** height (metres) |
+| `cam_X`, `cam_Y`, `cam_Z` | Camera centre ECEF (metres) |
+| `sigma_E`, `sigma_N`, `sigma_U` | 1-sigma uncertainty, local ENU (metres) |
+| `DGT_YawDegree`, `DGT_PitchDegree`, `DGT_RollDegree` | Camera attitude (degrees) |
+| `rtk_status` | RTK solution status (`Fixed`, `Float`, `Single`, `Unknown`) |
 
-### ECEF Coordinates (IGb20)
-| Column | Description |
-|--------|-------------|
-| `cam_X` | Camera center ECEF X (metres) |
-| `cam_Y` | Camera center ECEF Y (metres) |
-| `cam_Z` | Camera center ECEF Z (metres) |
-| `cov_total_ECEF` | Full 3×3 ECEF covariance matrix (m²) |
-| `sigma_total_ECEF` | Diagonal covariances [σX, σY, σZ] (metres) |
-| `coord_sys` | Reference frame (IGb20) |
+After `transform_coordinates()` every coordinate column is replaced with its
+value in the target frame — never left holding a source-frame value — and a
+projected target adds `cam_E` and `cam_N`.
 
-### Geodetic Coordinates (Lat/Lon/Height)
-| Column | Description |
-|--------|-------------|
-| `cam_lat` | Camera latitude (decimal degrees) |
-| `cam_lon` | Camera longitude (decimal degrees) |
-| `cam_h` | Camera altitude WGS84 ellipsoid (metres) |
+### Additional columns with `full_output=True`
 
-### Positional Uncertainties (1-sigma)
-| Column | Description |
-|--------|-------------|
-| `sigma_E` | Uncertainty in East direction (metres) |
-| `sigma_N` | Uncertainty in North direction (metres) |
-| `sigma_U` | Uncertainty in Up direction (metres) |
+| Group | Columns |
+|---|---|
+| Sequence & time | `seq`, `GPS_time`, `GPS_week` |
+| Antenna position | `X`, `Y`, `Z`, `lat_dd`, `lon_dd`, `hgt` |
+| Covariance | `cov_total_ECEF` (3×3, m²), `sigma_total_ECEF` |
+| Provenance | `epoch_decimal_year`, `base_source`, `cov_repaired` |
+| Lever arm | `gimbal_dN/dE/dD` (NED), `gimbal_dX/dY/dZ` (ECEF) |
+| Aircraft attitude | `FlightYawDegree`, `FlightPitchDegree`, `FlightRollDegree` |
+| Gimbal attitude | `GimbalYawDegree`, `GimbalPitchDegree`, `GimbalRollDegree` |
+| EXIF/XMP | `GpsLatitude`, `GpsLongitude`, `AbsoluteAltitude` |
+| Grouping | `flight` (flight folder name) |
 
-### RTK Solution Quality
-| Column | Description |
-|--------|-------------|
-| `rtk_status` | RTK solution status ("Fixed", "Float", etc.) |
-| `stddev` | Position standard deviation (metres) |
-
-### Gimbal/DJI Offsets (NED frame)
-| Column | Description |
-|--------|-------------|
-| `gimbal_dN` | Gimbal offset North (metres) |
-| `gimbal_dE` | Gimbal offset East (metres) |
-| `gimbal_dD` | Gimbal offset Down (metres) |
-| `gimbal_dX` | Gimbal offset ECEF X (metres) |
-| `gimbal_dY` | Gimbal offset ECEF Y (metres) |
-| `gimbal_dZ` | Gimbal offset ECEF Z (metres) |
-
-### Aircraft Attitude (Body Frame)
-| Column | Description |
-|--------|-------------|
-| `FlightYawDegree` | Aircraft body yaw (degrees from North) |
-| `FlightPitchDegree` | Aircraft body pitch (degrees) |
-| `FlightRollDegree` | Aircraft body roll (degrees) |
-
-### Gimbal Attitude (Stabilized)
-| Column | Description |
-|--------|-------------|
-| `GimbalYawDegree` | Gimbal-reported yaw (degrees) |
-| `GimbalPitchDegree` | Gimbal-reported pitch (degrees, -90=nadir) |
-| `GimbalRollDegree` | Gimbal-reported roll (degrees) |
-
-### Camera Attitude (Photogrammetry Angles)
-| Column | Description |
-|--------|-------------|
-| `DGT_YawDegree` | Camera yaw (degrees) |
-| `DGT_PitchDegree` | Camera pitch (degrees) |
-| `DGT_RollDegree` | Camera roll (degrees) |
-
-### Image Metadata (from EXIF/XMP)
-| Column | Description |
-|--------|-------------|
-| `GpsLatitude` | Image EXIF GPS latitude (decimal degrees) |
-| `GpsLongitude` | Image EXIF GPS longitude (decimal degrees) |
-| `AbsoluteAltitude` | Image EXIF absolute altitude (metres) |
-
-### Full ECEF Covariance (Alternative Storage)
-| Column | Description |
-|--------|-------------|
-| `X`, `Y`, `Z` | Alternative ECEF coordinates (metres) |
-| `cov_ecef_flat` | Flattened 3×3 covariance as nested array |
-
-### Flight Grouping
-| Column | Description |
-|--------|-------------|
-| `flight` | Flight folder name (Path.stem) for filtering |
-
----
-
-### Example Interpretation
-
-For a single row in the output CSV:
-```
-seq=1, GPS_time=325923.89, GPS_week=2377, FileName=DJI_20250730123142_0001.JPG
-cam_X=-1516923.93, cam_Y=-3308803.73, cam_Z=5220764.04 (ECEF coords)
-cam_lat=55.2959°, cam_lon=-114.6291°, cam_h=678.89 m (geodetic)
-sigma_E=0.0076 m, sigma_N=0.0112 m, sigma_U=0.0290 m (uncertainties)
-DGT_YawDegree=91.2°, DGT_PitchDegree=0.1°, DGT_RollDegree=0.0° (camera angles)
-```
-
-The **camera center position** (`cam_X/Y/Z`, `cam_lat/lon/h`) is the final geotagged location after:
-1. Interpolating PPK solution to exposure time
-2. Applying gimbal offset correction (NED → ECEF)
-3. Propagating full covariance through transformations
+Flights that failed are recorded in `geotag_df.attrs["failed_flights"]`, so an
+incomplete result does not have to be discovered by scraping the log.
 
 ## Covariance / Uncertainty Model
 
@@ -358,7 +290,7 @@ ENU frame:
 $$\Sigma_{\text{total}} = \Sigma_{\text{PPK}} + \Sigma_{\text{PPP}}, \qquad \Sigma_{\text{ENU}} = R\,\Sigma_{\text{total}}\,R^{\top}$$
 
 - **PPK (rover relative)** — $\Sigma_{\text{PPK}}$, per-epoch positioning precision from the RTKLIB `.pos` solution.
-- **PPP (base absolute)** — $\Sigma_{\text{PPP}}$, base station precision from the CSRS-PPP `.sum` file.
+- **PPP (base absolute)** — $\Sigma_{\text{PPP}}$, base station precision from the CSRS-PPP `.sum` file, including the epoch-propagation term when one applies.
 - $R$ — the ECEF → ENU rotation (Jacobian) at the epoch's latitude/longitude.
 
 Working at the covariance-matrix level (rather than adding scalar variances) preserves the
@@ -377,79 +309,140 @@ real error sources are **not** propagated into the reported values:
 - **Exposure time-sync** — a small camera/GNSS clock offset shifts the position by roughly
   speed × offset.
 - **Lever-arm / gimbal** — the MRK offset vector is applied as if error-free.
+- **Coordinate transformation** — `transform_coordinates()` rotates the uncertainty into the
+  target frame but does not add the transformation's own error.
+
+### RTKLIB covariance repair
+
+A small fraction of RTKLIB `.pos` epochs carry correlation values outside
+[−1, 1], making the implied covariance matrix indefinite — which cannot be
+inverted, so it cannot be used as a bundle-adjustment weight. `pos2df()`
+detects these by eigenvalue test and, with `fix_bad_covariance=True` (the
+default), replaces the matrix with the nearest valid epoch's. Positions are
+never altered, and repaired epochs are flagged in `cov_repaired`.
 
 ## Key Functions
 
-### Core Geotagging
+### Core
 - **`geotag(flight_folders, base_obs, base_nav, ...)`** - Batch process multiple flight folders (recommended)
-- **`load_and_compute_camera_positions(...)`** - Compute geotagged positions for a single batch of images
+- **`compute_camera_position(pos_df, mrk_df, img_df, ...)`** - Camera centres for one flight
 
-### Raw Data Processing
-- **`raw2rinex(input_path, ...)`** - Convert `.bin`/`.dat` to RINEX observation (.obs) and navigation (.nav) files
-- **`process_ppk(base_obs, base_nav, rover_obs, ...)`** - Run precise point positioning with RTKLIB
+### Raw data & PPK
+- **`raw2rinex(input_path, ...)`** - Convert `.bin`/`.dat` to RINEX `.obs` and `.nav`
+- **`process_ppk(base_obs, base_nav, rover_obs, ...)`** - Differential PPK with RTKLIB
+- **`pos2df(pos_file, ...)`** - Parse an RTKLIB `.pos` solution, with covariance validation
+- **`mrk2df(mrk_file)`** - Parse a DJI `.MRK` file
+- **`parse_img_dir(flight_dir)`** - Read EXIF/XMP from a flight folder
 
-### Ephemeris & Configuration
-- **`download_igs_data(...)`** - Download IGS precise orbits and clocks (SP3/CLK)
-- **`pause_for_PPP_sum_file()`** - Interactive prompt for CSRS-PPP `.sum` file
-- **`override_rtklib_config(user_conf, ...)`** - Merge and export RTKLIB configuration
+### Base station
+- **`resolve_base_position(mode, ...)`** - `"online"`, `"sum"` or `"manual"`
+- **`build_base_position(...)`** - Build the structure from known coordinates
+- **`run_online_ppp(rinex_path, email, out_dir, ...)`** - Submit, wait, download
+- **`sum_file_parser(...)`** - Parse a CSRS-PPP `.sum`
 
-### Coordinate Transformation
-- **`transform_coordinates(df, target_crs, ...)`** - Convert ECEF → projected CRS (e.g., UTM)
-- **`save_csv(df)`** - Export results to timestamped CSV file
+### Coordinate transformation
+- **`transform_coordinates(df, target_crs, ...)`** - Datum transformation and projection
+- **`make_utm_crs(zone, datum_crs)`** - UTM on a datum EPSG has no code for
+- **`rebase_projected_crs(projected_crs, datum_crs)`** - Any projection, on a chosen datum
+- **`resolve_source_crs(coord_sys)`** - Frame token (`"IGb20"`, `"NAD83"`) → CRS
+
+### Infrastructure
+- **`ensure_rtklib(auto_install=True)`** - Download RTKLIB binaries
+- **`configure_logging(...)`** - Route output to a file, a GUI, or silence it
+- **`Progress`**, **`OperationCancelled`** - Progress reporting and cooperative cancellation
+
+Two helpers are not re-exported at the top level:
+
+```python
+from dji_geotagger.ppk.ephemeris_downloader import download_igs_data
+from dji_geotagger.config.import_config import override_rtklib_config
+```
 
 ## Configuration
 
-### RTKLIB Settings
-Default PPK configuration is in `dji_geotagger/config/default_ppk_dict.py`. Override using:
+### RTKLIB settings
+
+Defaults are in `dji_geotagger/config/default_ppk_dict.py`. Override with:
 
 ```python
 user_config = {
     'pos1-posmode': 'kinematic',
     'pos1-frequency': '1',
     'pos1-soltype': 'forward',
-    # ... any other RTKLIB parameters
 }
 
-dgt.geotag(flight_folders, base_obs, base_nav, user_conf=user_config)
+dgt.process_ppk(base_obs, base_nav, rover_obs, user_conf=user_config)
 ```
 
-### Base Station Position Options
+### Progress and cancellation
 
-**Option 1: CSRS-PPP (Recommended)**
+`geotag()`, `process_ppk()` and `raw2rinex()` accept a `progress` argument. It
+also carries cancellation, which interrupts long waits and terminates RTKLIB
+subprocesses rather than waiting for them:
+
 ```python
-geotag_df = dgt.geotag(..., sum_file_path="path/to/base.sum")
+cancelled = False
+
+progress = dgt.Progress(
+    on_progress=lambda e: print(f"{e.stage}: {e.message}"
+                                + (f" ({e.fraction:.0%})" if e.fraction else "")),
+    should_cancel=lambda: cancelled,
+)
+
+try:
+    geotag_df = dgt.geotag(..., progress=progress)
+except dgt.OperationCancelled:
+    print("Cancelled")
 ```
 
-**Option 2: Manual ECEF Coordinates**
+An exception raised inside `on_progress` is suppressed — a faulty display must
+not abort a long computation.
+
+### Logging
+
+Console logging is configured on import so existing scripts print what they
+always printed. To silence it or route it elsewhere, attach your own handler
+to the `dji_geotagger` logger:
+
 ```python
-user_config = {
-    'ant2-postype': 'xyz',
-    'ant2-pos1': X_meters,
-    'ant2-pos2': Y_meters,
-    'ant2-pos3': Z_meters,
-}
-geotag_df = dgt.geotag(..., user_conf=user_config)
+import logging
+
+dgt.configure_logging(console=False)          # silence the console handler
+logging.getLogger("dji_geotagger").addHandler(logging.FileHandler("run.log"))
 ```
 
 ## Troubleshooting
 
-### RTKLIB Not Found
-The library will automatically prompt to download RTKLIB binaries on first use. To skip the prompt:
+### RTKLIB not found
+Binaries are downloaded on first use. To do it up front:
 ```python
-dgt.download_rtklib_bins()
+dgt.ensure_rtklib()
 ```
 
-### No PPP Sum File Available
-If you don't have access to CSRS-PPP:
-1. Ensure base station coordinates are accurate (use surveyed position or local PPP)
-2. Provide coordinates via `user_conf` dictionary
-3. Accept slightly higher positional uncertainty (typically ±0.5–1.0 m without PPP refinement)
+### No CSRS-PPP account
+Use `mode="manual"` with a surveyed position. `sigma_ENU` is a required
+argument; pass `None` to disable base error propagation. It is never assumed
+to be zero.
 
-### Image-Time Mismatch
+### Base and rover do not overlap in time
+PPK is differential, so epochs outside the base station's span cannot be
+solved. The overlap is checked before RTKLIB runs; partial coverage warns and
+continues, no overlap raises. Disable with `check_overlap=False`.
+
+### One flight fails in a batch
+`geotag()` skips it and continues by default, listing failures in
+`attrs["failed_flights"]`. Pass `on_flight_error="raise"` to stop on the first
+failure instead.
+
+### Image-time mismatch
 Ensure:
 - Camera clock is synchronized within ±1 second of GPS
 - EXIF/XMP timestamps are in UTC (not local time)
 - MRK files cover the same time period as images
+
+### Every image reports no metadata
+`defusedxml` is missing. Pillow's `getxmp()` needs it and fails silently
+without it.
 
 ## Performance Tips
 
