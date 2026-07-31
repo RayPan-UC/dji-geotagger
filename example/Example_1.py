@@ -77,6 +77,11 @@ geotag_df.to_csv("LOCATION.csv", index=True)
 # itrf_utm = dgt.make_utm_crs(11, 9988)
 # dgt.transform_coordinates(geotag_df, itrf_utm)
 
+#  Alberta 3TM exists only as unversioned NAD83(CSRS) (EPSG:3779-3802), which
+#  is the ballpark case above - so lift the grid onto a versioned datum:
+# alberta_3tm = dgt.rebase_projected_crs(3780, 10412)   # 114 W, on v8
+# dgt.transform_coordinates(geotag_df, alberta_3tm)
+
 #  NOTE ON EPOCH: this step does NOT move coordinates between epochs - that
 #  needs the NAD83 v8.0 velocity grid, which PROJ does not ship. For delivery
 #  at a fixed epoch, ask CSRS-PPP for it in step 2 instead:

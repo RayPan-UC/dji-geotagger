@@ -28,5 +28,6 @@ from dji_geotagger.core.transform import (
     transform_coordinates,
     resolve_source_crs,
     make_utm_crs,
+    rebase_projected_crs,
     TransformError,
 )

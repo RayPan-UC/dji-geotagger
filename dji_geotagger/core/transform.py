@@ -201,6 +201,65 @@ def make_utm_crs(zone: int, datum_crs, south: bool = False) -> CRS:
     )
 
 
+def rebase_projected_crs(projected_crs, datum_crs) -> CRS:
+    """
+    Keep a projection's grid definition but put it on a different datum.
+
+    EPSG's coverage of realizations is uneven. Alberta 3TM exists only as
+    ``NAD83(CSRS)`` with no version (EPSG:3779-3802), and Alberta is where
+    this package is used - so the codes a user reaches for first are exactly
+    the ones that fall back to ballpark and discard the 1.63 m datum shift.
+    :func:`make_utm_crs` solves that for UTM only; this solves it for any
+    projection by lifting the grid definition off one CRS and re-basing it.
+
+    Verified against the ``MTM`` line CSRS-PPP prints in the .sum: an Alberta
+    3TM 114 W rebased onto NAD83(CSRS)v8 reproduced NRCan's northing exactly
+    (6129551.361), where the unversioned EPSG:3780 was 1.60 m away.
+
+    Parameters
+    ----------
+    projected_crs : pyproj.CRS or int or str
+        Supplies the map projection - central meridian, scale factor, false
+        origin. Its datum is discarded.
+    datum_crs : pyproj.CRS or int or str
+        Supplies the datum, e.g. ``10412`` for NAD83(CSRS)v8.
+
+    Returns
+    -------
+    pyproj.CRS
+        Projected CRS with the one's grid and the other's datum.
+
+    Raises
+    ------
+    TransformError
+        If `projected_crs` is not a projected CRS, so there is no projection
+        to lift.
+
+    Examples
+    --------
+    >>> alberta_3tm_v8 = rebase_projected_crs(3780, 10412)
+    >>> transform_coordinates(geotag_df, alberta_3tm_v8)   # doctest: +SKIP
+    """
+    projected_crs = CRS.from_user_input(projected_crs)
+    datum_crs = CRS.from_user_input(datum_crs)
+
+    if not projected_crs.is_projected or projected_crs.coordinate_operation is None:
+        raise TransformError(
+            f"[ERROR] {projected_crs.name!r} is not a projected CRS, so it "
+            "carries no map projection to re-base. Pass the projected CRS "
+            "whose grid you want (e.g. EPSG:3780) as the first argument and "
+            "the datum you want (e.g. EPSG:10412) as the second."
+        )
+
+    base = GeographicCRS(name=f"{datum_crs.name} (geographic)",
+                         datum=datum_crs.datum)
+    return ProjectedCRS(
+        name=f"{datum_crs.name} / {projected_crs.coordinate_operation.name}",
+        conversion=projected_crs.coordinate_operation,
+        geodetic_crs=base,
+    )
+
+
 def _geographic3d(crs: CRS) -> CRS:
     """
     Geographic 3D CRS on the same datum as ``crs``.
