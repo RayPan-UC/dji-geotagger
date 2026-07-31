@@ -20,9 +20,11 @@ end-to-end on 2026-07-30 against CSRS-PPP v5.15.4.
    -> ZIP archive containing ``.sum`` / ``.pos`` / ``.tro`` / ``.clk`` /
    ``.csv`` / ``.pdf``
 
-No session cookie and no CSRF token are involved: ``user_name`` (the account
-email) is the only identity, and every hidden form field is a static value.
-This is what makes the flow automatable rather than merely replayable.
+No session cookie and no CSRF token are involved: ``user_name`` (an email
+address) is the only identity, and every hidden form field is a static value.
+This is what makes the flow automatable rather than merely replayable. The
+address is checked for format only - see :func:`submit_rinex` - so no CSRS
+account is required.
 
 Stability
 ---------
@@ -109,13 +111,21 @@ def submit_rinex(
     rinex_path : str | Path
         RINEX observation file, typically the base-station ``.obs``.
     email : str
-        CSRS account email. Doubles as the identity and the notification
-        address; no password is involved. The service checks that the field
-        is present and well-formed - an empty one is rejected with
-        ``ERROR [004]`` - but does not appear to verify it against a
-        registered account. Give your own address regardless: it is how NRCan
-        attributes the job, and how you recover results if the poll is
-        interrupted.
+        Notification address; no password is involved.
+
+        The service validates the *format*, not the identity. An empty or
+        malformed address is rejected with ``ERROR [004]``, but an address
+        with no CSRS account behind it is processed normally: submitting the
+        same RINEX under an unregistered address on 2026-07-31 returned a
+        solution identical to the registered one to 0.000 mm, with the same
+        sigmas and the same seven output files. There is no queue penalty and
+        no degraded tier, so a CSRS account is not a prerequisite for using
+        this module.
+
+        Supply a real address you control anyway. NRCan attributes the job by
+        it, and the notification it sends is the only copy of the processing
+        key outside this process - if the poll is interrupted, that email is
+        how the results are recovered.
     process_type : {"Static", "Kinematic"}, optional
         Use ``"Static"`` for a base station on a fixed mark.
     sysref : {"ITRF", "NAD83"}, optional
@@ -149,11 +159,11 @@ def submit_rinex(
     # and base-station RINEX runs to tens of megabytes.
     if not _EMAIL_PATTERN.match((email or "").strip()):
         raise ValueError(
-            f"[ERROR] A CSRS account email is required, got {email!r}.\n"
+            f"[ERROR] An email address is required, got {email!r}.\n"
             "        CSRS-PPP identifies the submission by it - there is no "
             "password and no session - and rejects the upload without one.\n"
-            "        Register free at "
-            "https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php"
+            "        It need not belong to a CSRS account, but it should be "
+            "one you can read: the notification carries the processing key."
         )
     if process_type not in VALID_PROCESS_TYPES:
         raise ValueError(f"[ERROR] process_type must be one of "
@@ -456,7 +466,8 @@ def run_online_ppp(
     rinex_path : str | Path
         Base-station RINEX observation file.
     email : str
-        CSRS account email.
+        Notification address; no CSRS account required. See
+        :func:`submit_rinex`.
     out_dir : str | Path
         Where to place the archive and extracted results.
     process_type, sysref, nad83_epoch

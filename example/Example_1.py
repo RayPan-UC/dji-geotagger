@@ -11,7 +11,8 @@ base_obs, base_nav = dgt.raw2rinex(r"DRTK3\DRTK3_0038_20250730102537_XXXXX.dat",
 #  the coordinates before committing to a run that takes minutes per flight.
 
 # (a) Submit to CSRS-PPP automatically and fetch the .sum back. Default.
-#     Needs a free CSRS account; the email is the only credential involved.
+#     No CSRS account needed - the email is only a notification address,
+#     but use one you can read: it carries the key if the poll is cut off.
 #     Use sysref="NAD83" for Canadian deliverables, "ITRF" for the global frame.
 #
 #     To deliver at a fixed epoch, ask for it HERE - this is the only step in

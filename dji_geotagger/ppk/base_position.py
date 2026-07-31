@@ -308,7 +308,8 @@ def resolve_base_position(
     sum_file_path : str, optional
         Explicit ``.sum`` path for ``sum`` mode.
     email : str, optional
-        CSRS account email, required for ``online`` mode.
+        Email address, required for ``online`` mode. No CSRS account is
+        needed - the service validates the format only.
     ppp_out_dir : str, optional
         Where ``online`` mode writes downloaded results. Defaults to a ``PPP``
         directory beside `base_obs`.
@@ -363,9 +364,10 @@ def resolve_base_position(
                 "submit).")
         if not email:
             raise ValueError(
-                "[ERROR] mode='online' requires email (your CSRS account "
-                "address). Register free at "
-                "https://webapp.csrs-scrs.nrcan-rncan.gc.ca/geod/account-compte/login.php")
+                "[ERROR] mode='online' requires email (the address CSRS-PPP "
+                "sends results to). No account is needed - the service checks "
+                "the format only - but use an address you can read: the "
+                "notification carries the processing key.")
 
         out_dir = Path(ppp_out_dir) if ppp_out_dir \
             else Path(base_obs).parent / "PPP"

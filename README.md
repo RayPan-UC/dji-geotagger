@@ -73,7 +73,7 @@ All three modes return the same structure, so the rest of the script is
 unchanged whichever is used.
 
 ```python
-# Submit to CSRS-PPP and fetch the .sum back (needs a free CSRS account)
+# Submit to CSRS-PPP and fetch the .sum back (no account needed)
 dgt.resolve_base_position(mode="online", base_obs=base_obs,
                           email="you@example.com")
 
