@@ -176,11 +176,12 @@ def raw2rinex(
 
 def PPP_help(obs_path: Path):
     """
-    Display CSRS-PPP product tier availability estimate and submission instructions.
+    Report which NRCan orbit/clock product tier CSRS-PPP can currently use.
 
-    Based on the last observation epoch in the RINEX file, this function estimates
-    which NRCan precise orbit/clock product tier is currently available and provides
-    instructions for submitting the data to CSRS-PPP for post-processing.
+    Submitting before the FINAL orbits are published still works, but the base
+    position it returns is weaker, and nothing in the .sum flags that the
+    solution was ultra-rapid. Since the base position propagates into every
+    image, that is worth knowing before submitting rather than after.
 
     Parameters
     ----------
@@ -190,23 +191,19 @@ def PPP_help(obs_path: Path):
     Returns
     -------
     None
-        Prints status and instructions to console.
+        Logs the estimated tier; warns when it is below FINAL.
 
     Notes
     -----
-    Product Availability Timeline:
-    - Ultra-rapid orbits: ~1–2 hours after last observation epoch
-    - Rapid orbits: ~17–18 hours after end of day (UTC)
-    - Final orbits: ~12–15 days after end of calendar week (UTC Sunday)
+    Availability, measured from the last observation epoch:
 
-    CSRS-PPP Submission Steps:
-    1. Extract the .obs file from the PPK output directory
-    2. Upload to https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php
-    3. Select positioning mode: "Static"
-    4. Select coordinate system: "ITRF"
-    5. Download result .sum file when processing completes
-    6. Place .sum file in the same directory as the .obs file
-    7. Re-run DJI-Geotagger PPK processing with the .sum file path
+    - Ultra-rapid: ~1-2 hours
+    - Rapid: ~17-18 hours after end of day (UTC)
+    - Final: ~12-15 days after end of week (UTC Sunday)
+
+    Submission itself is automated - see
+    :func:`~dji_geotagger.ppk.base_position.resolve_base_position` with
+    ``mode="online"``.
     """
     # get last epoch
     times = gr.gettime(obs_path)
@@ -236,36 +233,19 @@ def PPP_help(obs_path: Path):
         current_available = "NOT-YET"
 
 
-    if current_available != "FINAL":
-        logger.info(f"""
-CSRS-PPP Product Tier Estimate: {current_available}
-        TIME OF LAST OBS: {last_epoch.strftime('%Y-%m-%d %H:%M UTC')}
-        Estimated FINAL availability: {final_available.strftime('%Y-%m-%d %H:%M UTC')}
-
-        NRCan Product:
-        - Ultra-rapid: ~1–2 hours after last epoch
-        - Rapid: ~17–18 hours after end of day (UTC)
-        - Final: ~12–15 days after end of week (UTC Sunday)
-        """)
+    obs_time = last_epoch.strftime('%Y-%m-%d %H:%M UTC')
+    if current_available == "FINAL":
+        logger.info(f"CSRS-PPP ephemeris tier: FINAL (last obs {obs_time})")
+    elif current_available == "NOT-YET":
+        logger.warning(
+            f"CSRS-PPP ephemeris tier: none yet (last obs {obs_time}). "
+            "Even ultra-rapid orbits are not published until ~2 h after the "
+            "last epoch. FINAL expected "
+            f"{final_available.strftime('%Y-%m-%d %H:%M UTC')}.")
     else:
-        logger.info(f"""
-You can now submit the RINEX file to CSRS-PPP for precise positioning:
-              
-        - Product Tier Estimate: {current_available}
-
-        - https://webapp.geod.nrcan.gc.ca/geod/tools-outils/ppp.php
-            1. Upload your .obs file
-            2. Enter your email address
-            3. Download the result file when processing completes 
-            4. Place the PPP summary file with your .obs file
-            5. Continue processing with DJI-Geotagger.
-
-        - Recommended options:
-                1. Positioning mode: Static
-                2. Coordinate system: ITRF
-        
-        - 
-        
-        Processing takes ~5–30 minutes depending on data length.
-            """)
+        logger.warning(
+            f"CSRS-PPP ephemeris tier: {current_available} "
+            f"(last obs {obs_time}). FINAL expected "
+            f"{final_available.strftime('%Y-%m-%d %H:%M UTC')}; "
+            "reprocessing then gives a better base position.")
 
