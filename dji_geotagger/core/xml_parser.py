@@ -3,6 +3,7 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 from dji_geotagger.tools.logging_setup import get_logger
+from dji_geotagger.tools.progress import as_progress
 
 logger = get_logger(__name__)
 
@@ -95,7 +96,8 @@ def parse_img_info(
 
 def parse_img_dir(
         img_dir: str,
-        add_format_orientation: bool = True
+        add_format_orientation: bool = True,
+        progress=None
     ) -> pd.DataFrame:
     """
     Parse DJI image XMP metadata for all images under a flight folder.
@@ -131,11 +133,23 @@ def parse_img_dir(
         logger.warning(f"No images found in {img_dir}")
         return pd.DataFrame()
 
+    progress = as_progress(progress)
+    # A terminal progress bar is noise when another consumer is listening, and
+    # invisible in a GUI: it writes to stderr.
     records = []
-    for img in tqdm(image_files, desc="[INFO] Gathering image metadata (EXIF/XMP via Pillow)"):
+    total = len(image_files)
+    iterator = image_files if progress.is_active else tqdm(
+        image_files,
+        desc="[INFO] Gathering image metadata (EXIF/XMP via Pillow)")
+
+    for index, img in enumerate(iterator, start=1):
         img_info = parse_img_info(img, add_format_orientation)
         if img_info is not None:
             records.append(img_info)
+        # Checked every image: this loop can run to thousands of files, and a
+        # cancel request should not have to wait for the whole folder.
+        progress.update("images", f"Reading metadata: {img.name}",
+                        current=index, total=total)
 
     # Save as Dataframe
     df = pd.DataFrame(records)

@@ -8,6 +8,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "pillow",
+  # Required by Pillow's Image.getxmp(). Without it XMP is silently
+  # unreadable, so every image yields "No metadata found" and the pipeline
+  # produces nothing.
+  "defusedxml",
   "pandas",
   "numpy",
   "pyproj",

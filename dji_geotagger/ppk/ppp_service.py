@@ -55,6 +55,7 @@ from pathlib import Path
 import requests
 
 from dji_geotagger.tools.logging_setup import get_logger
+from dji_geotagger.tools.progress import as_progress
 
 logger = get_logger(__name__)
 
@@ -205,9 +206,10 @@ def wait_for_results(
     *,
     poll_interval: int = 30,
     timeout: int = 3600,
-) -> list[str]:
+    progress=None,
+) -> bytes:
     """
-    Poll until CSRS-PPP has finished processing, then return download links.
+    Poll until CSRS-PPP has finished processing, then return the archive.
 
     Parameters
     ----------
@@ -217,6 +219,10 @@ def wait_for_results(
         Seconds between polls. Kept generous: this is a shared public service.
     timeout : int, optional
         Give up after this many seconds.
+    progress : Progress, optional
+        Progress reporting and cancellation. This loop can run for the best
+        part of an hour, so the wait between polls is interruptible rather
+        than a plain sleep.
 
     Returns
     -------
@@ -243,8 +249,11 @@ def wait_for_results(
     that it is a valid, non-empty ZIP. The bytes are returned so the download
     is not repeated.
     """
+    progress = as_progress(progress)
     waited = 0
     while True:
+        progress.update("ppp", f"Waiting for CSRS-PPP ({waited}s)",
+                        current=waited, total=timeout)
         try:
             response = requests.get(RESULTS_URL, params={"id": key},
                                     timeout=60)
@@ -274,7 +283,9 @@ def wait_for_results(
                 f"key:\n        {key}")
 
         logger.info(f"Still processing... ({waited}s elapsed)")
-        time.sleep(poll_interval)
+        # Cancellable: a bare sleep would make a cancel request wait out the
+        # full poll interval before being noticed.
+        progress.sleep(poll_interval)
         waited += poll_interval
 
 
@@ -394,6 +405,7 @@ def run_online_ppp(
     nad83_epoch: str = "NAD83_CURR",
     poll_interval: int = 30,
     timeout: int = 3600,
+    progress=None,
 ) -> Path:
     """
     Submit, wait and download in one call.
@@ -420,5 +432,5 @@ def run_online_ppp(
     key = submit_rinex(rinex_path, email, process_type=process_type,
                        sysref=sysref, nad83_epoch=nad83_epoch)
     archive = wait_for_results(key, poll_interval=poll_interval,
-                               timeout=timeout)
+                               timeout=timeout, progress=progress)
     return save_results(archive, out_dir)

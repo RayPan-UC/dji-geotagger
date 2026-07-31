@@ -6,6 +6,7 @@ from dji_geotagger.core.mrk_parser import mrk2df
 from dji_geotagger.core.xml_parser import parse_img_dir
 from dji_geotagger.core.camera_pos_solver import compute_camera_position
 from dji_geotagger.ppk.base_position import resolve_base_position
+from dji_geotagger.tools.progress import as_progress
 
 
 def geotag(
@@ -14,7 +15,8 @@ def geotag(
     base_nav: str,
     sum_file_path: str = None,
     full_output: bool = False,
-    base_position: dict = None
+    base_position: dict = None,
+    progress=None
 ) -> pd.DataFrame:
     """
     High-level API: run an end-to-end DJI geotagging pipeline for one or more flight folders.
@@ -61,6 +63,25 @@ def geotag(
             # ... check the printed position ...
             df = dgt.geotag(flights, base_obs, base_nav, base_position=bp)
 
+    progress : Progress, optional
+        Progress reporting and cancellation, from
+        :mod:`dji_geotagger.tools.progress`. A run takes minutes to hours, so
+        a caller that is not a terminal needs both to display where it is and
+        to be able to stop it::
+
+            from dji_geotagger.tools.progress import Progress, OperationCancelled
+
+            p = Progress(on_progress=lambda ev: gui.update(ev.fraction, ev.message),
+                         should_cancel=lambda: gui.cancel_pressed)
+            try:
+                df = dgt.geotag(flights, base_obs, base_nav, progress=p)
+            except OperationCancelled:
+                gui.show("Cancelled.")
+
+        Cancellation is cooperative and is honoured inside the long external
+        steps too - the RTKLIB solve and the CSRS-PPP poll are supervised
+        rather than simply awaited.
+
     Returns
     -------
     pd.DataFrame
@@ -75,6 +96,9 @@ def geotag(
     FileNotFoundError / RuntimeError
         Propagated from lower-level functions (e.g., RTKLIB execution, missing base files, parsing errors).
     """
+    progress = as_progress(progress)
+    progress.update("start", "Resolving base station position")
+
     # Resolve the base position once, before any flight is processed. Two
     # reasons: the .sum was previously re-parsed for every flight, and a bad
     # base position should surface before RTKLIB spends minutes on the first
@@ -88,23 +112,30 @@ def geotag(
         )
 
     results = []
+    n_flights = len(flight_folders)
 
-    for flight_dir in flight_folders:
+    for flight_index, flight_dir in enumerate(flight_folders, start=1):
 
         flight_dir = Path(flight_dir)
+        # Flight count is the unit a user actually thinks in, so it drives the
+        # overall figure; the per-step detail rides along in the message.
+        progress.update("flight", f"Flight {flight_index}/{n_flights}: "
+                                  f"{flight_dir.name}",
+                        current=flight_index - 1, total=n_flights)
 
         # Step 1+2: Rover RINEX + PPK
         rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
         if not rover_raws:
             raise FileNotFoundError(f"No *_PPKRAW.bin found in {flight_dir}")
         rover_raw = rover_raws[0]
-        rover_obs, _ = raw2rinex(rover_raw)
+        rover_obs, _ = raw2rinex(rover_raw, progress=progress)
         pos_df = process_ppk(
                         base_obs,
                         base_nav,
                         rover_obs=rover_obs,
                         sum_file_path=sum_file_path,
-                        base_position=base_position)
+                        base_position=base_position,
+                        progress=progress)
 
         # Step 3: MRK
         mrks = list(flight_dir.glob("*.MRK"))
@@ -114,7 +145,7 @@ def geotag(
         mrk_df = mrk2df(mrk)
 
         # Step 4: Image XML
-        img_df = parse_img_dir(flight_dir)
+        img_df = parse_img_dir(flight_dir, progress=progress)
 
         # Step 5: Camera position
         result = compute_camera_position(
@@ -127,6 +158,8 @@ def geotag(
         # flight name
         result["flight"] = flight_dir.stem
         results.append(result)
+        progress.update("flight", f"Finished {flight_dir.name}",
+                        current=flight_index, total=n_flights)
 
     if not results:
         raise RuntimeError("No flights were successfully processed.")

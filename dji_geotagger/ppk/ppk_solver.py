@@ -7,6 +7,7 @@ from dji_geotagger.ppk.PPP_sum_parser import sum_file_parser
 from dji_geotagger.config.import_config import override_rtklib_config
 from dji_geotagger.core.pos_parser import pos2df
 from dji_geotagger.tools.logging_setup import get_logger
+from dji_geotagger.tools.progress import as_progress
 
 logger = get_logger(__name__)
 
@@ -23,7 +24,8 @@ def process_ppk(
     RTKLIB: Path = None,
     overwrite: bool = False,
     base_position: dict = None,
-    auto_install: bool = None
+    auto_install: bool = None,
+    progress=None
     ) -> pd.DataFrame:
     """
     Run a single RTKLIB PPK solution (rnx2rtkp) for one rover observation file and
@@ -130,6 +132,9 @@ def process_ppk(
                 raise FileNotFoundError(f"[ERROR] Ephemeris file not found: {file}")
     
 
+    progress = as_progress(progress)
+    progress.check()
+
     # Check rnx2rtkp
     rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB, auto_install)
 
@@ -166,13 +171,14 @@ def process_ppk(
             *[str(f) for f in ephemeris_files],
         ]
 
-        try:
-            logger.info(f"Solving: {rover_obs.name} ...")
-            subprocess.run(cmd, check=True)
-            logger.info(f"Finished: {output_pos.name}")
-        
-        except subprocess.CalledProcessError:
-            raise RuntimeError(f"[ERROR] Failed to process: {rover_obs.name}")
+        logger.info(f"Solving: {rover_obs.name} ...")
+        progress.update("ppk", f"Solving {rover_obs.name}")
+        returncode = progress.run_subprocess(cmd)
+        if returncode != 0:
+            raise RuntimeError(
+                f"[ERROR] Failed to process: {rover_obs.name} "
+                f"(rnx2rtkp exit {returncode})")
+        logger.info(f"Finished: {output_pos.name}")
 
     # .pos -> df
     df = pos2df(

@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from dji_geotagger.tools.install_RTKLIB import get_rtklib_executable
 import georinex as gr
 from dji_geotagger.tools.logging_setup import get_logger
+from dji_geotagger.tools.progress import as_progress
 
 logger = get_logger(__name__)
 
@@ -15,6 +16,7 @@ def raw2rinex(
     appr_time: str = None,
     RTKLIB: str = None,
     auto_install: bool = None,
+    progress=None,
     ) -> tuple[Path, Path]:
     """
     Convert raw GNSS files (.dat, .bin) to RINEX format using RTKLIB convbin.
@@ -149,16 +151,21 @@ def raw2rinex(
 
     logger.info(f"Converting: {input_path.name}  ({type_dir})")
 
-    try:
-        subprocess.run(
-            cmd, 
-            check=True, 
-            stdout=subprocess.DEVNULL, 
-            stderr=subprocess.DEVNULL
-            )        
-        logger.info(f"✓ Converted. Output: {rinex_dir}")
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"[ERROR] Failed to convert {input_path}") from e
+    progress = as_progress(progress)
+    progress.update("convert", f"Converting {input_path.name}")
+
+    # Supervised rather than awaited, so a cancel request during a large
+    # conversion is acted on instead of queued until the child exits.
+    returncode = progress.run_subprocess(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if returncode != 0:
+        raise RuntimeError(
+            f"[ERROR] Failed to convert {input_path} (convbin exit "
+            f"{returncode})")
+    logger.info(f"✓ Converted. Output: {rinex_dir}")
     
     if type_dir == "base":
         PPP_help(obs_path)
