@@ -49,3 +49,40 @@ flight_folders = [
 ## 4. flight as unit to process
 geotag_df = dgt.geotag(flight_folders, base_obs, base_nav, base_position=base_position)
 geotag_df.to_csv("LOCATION.csv", index=True)
+
+## 5. (optional) Transform to a delivery CRS
+#  geotag() leaves the output in whatever frame CSRS-PPP solved in, tagged
+#  with the reference epoch. Keep that file: the frame + epoch pair is
+#  lossless, so any other CRS can still be derived from it later.
+#
+#  Use VERSIONED EPSG codes. EPSG:2956 and EPSG:22812 are both called
+#  "NAD83(CSRS) / UTM zone 12N", but the first names no realization, so PROJ
+#  cannot find a rigorous transformation and silently discards the entire
+#  1.63 m datum shift. transform_coordinates() refuses that case, along with
+#  datum ensembles such as plain WGS 84 - see the module docstring.
+#
+#     22811 = NAD83(CSRS)v8 / UTM zone 11N     (last two digits are the zone)
+#     22812 = NAD83(CSRS)v8 / UTM zone 12N
+#     10412 = NAD83(CSRS)v8 geocentric, if you want ECEF rather than a grid
+
+# utm_df = dgt.transform_coordinates(geotag_df, 22811)
+# utm_df.to_csv("LOCATION_UTM11N.csv", index=True)
+#
+# Provenance for the delivery note - half a year from now this is what decides
+# whether the data can be trusted.
+# print(utm_df.attrs["transform"])
+
+#  No EPSG code exists for a UTM zone on ITRF2020, so build one when you want
+#  to project without changing datum at all:
+# itrf_utm = dgt.make_utm_crs(11, 9988)
+# dgt.transform_coordinates(geotag_df, itrf_utm)
+
+#  NOTE ON EPOCH: this step does NOT move coordinates between epochs - that
+#  needs the NAD83 v8.0 velocity grid, which PROJ does not ship. For delivery
+#  at a fixed epoch, ask CSRS-PPP for it in step 2 instead:
+#
+#      ppp_kwargs={"sysref": "NAD83", "nad83_epoch": "NAD83_20100101"}
+#
+#  which also returns the propagation uncertainty (0.75-1.10 cm at 1-sigma
+#  over 15.6 years - the same order as the PPP solution itself). Note that
+#  "NAD83_CURR" does NOT propagate; it stays at the observation epoch.
