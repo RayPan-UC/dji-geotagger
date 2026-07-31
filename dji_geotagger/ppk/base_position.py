@@ -257,6 +257,10 @@ def build_base_position(
         "coord_sys": coord_sys,
         "epoch": epoch,
         "epoch_decimal_year": _epoch_to_decimal_year(epoch),
+        # Both describe how CSRS-PPP moved a solution through time, which does
+        # not apply here: whatever the user typed is taken at its stated epoch.
+        "velocity_model": None,
+        "epoch_propagated": False,
         "X": float(X),
         "Y": float(Y),
         "Z": float(Z),

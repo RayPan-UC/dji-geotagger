@@ -113,6 +113,82 @@ def resolve_ppp_sum_file(
     )
 
 
+def _parse_pos_header(parts: list[str], sum_file_path: Path) -> dict:
+    """
+    Read the POS block column layout from its header line.
+
+    CSRS-PPP emits two different POS headers. Without epoch propagation there
+    is a single sigma column::
+
+        POS CRD SYST EPOCH A_PRIORI ESTIMATED DIFF SIGMA(95%) CORRELATIONS
+
+    When the solution is propagated to a fixed epoch - ``sysref="NAD83"`` with
+    ``nad83_epoch`` other than ``NAD83_CURR`` - a second sigma column appears::
+
+        POS CRD SYST EPOCH A_PRIORI ESTIMATED DIFF SIG_PPP(95%) SIG_TOT(95%) CORRELATIONS
+
+    ``SIG_TOT`` is the total: the PPP solution uncertainty combined with the
+    velocity-grid interpolation error incurred by moving the coordinate in
+    time. On a 15.6-year propagation it contributed 0.75-1.10 cm (1-sigma),
+    i.e. the same order as the PPP solution itself, so it is not negligible.
+
+    The extra column shifts every correlation one place right. Reading fixed
+    offsets against a propagated .sum silently returns ``SIG_TOT`` where
+    ``rho_XY`` is expected - a plausible-looking float, so nothing raises and
+    the covariance matrix is quietly wrong. Hence this function.
+
+    Parameters
+    ----------
+    parts : list[str]
+        Whitespace-split tokens of the ``POS CRD`` header line.
+    sum_file_path : Path
+        Only used to name the file in error messages.
+
+    Returns
+    -------
+    dict
+        Token indices ``syst``, ``epoch``, ``est``, ``sigma``, ``corr``, and
+        ``sigma_tot`` (``None`` when the file has a single sigma column).
+        Data rows use the same offsets as the header, except the DMS rows -
+        see :func:`sum_file_parser`.
+
+    Raises
+    ------
+    ValueError
+        If a column this parser depends on is absent, which means the .sum
+        format has changed in a way that cannot be handled by shifting
+        offsets.
+    """
+    def index_of(name: str) -> int:
+        try:
+            return parts.index(name)
+        except ValueError:
+            raise ValueError(
+                f"[ERROR] The POS header of {sum_file_path.name} has no "
+                f"{name!r} column.\n"
+                f"        Header: {' '.join(parts)}\n"
+                "        CSRS-PPP may have changed the .sum format; parsing "
+                "was stopped rather than guessing column positions."
+            ) from None
+
+    # SIG_PPP/SIG_TOT replace SIGMA when the epoch is propagated.
+    if "SIG_TOT(95%)" in parts:
+        sigma = index_of("SIG_PPP(95%)")
+        sigma_tot = index_of("SIG_TOT(95%)")
+    else:
+        sigma = index_of("SIGMA(95%)")
+        sigma_tot = None
+
+    return {
+        "syst": index_of("SYST"),
+        "epoch": index_of("EPOCH"),
+        "est": index_of("ESTIMATED"),
+        "sigma": sigma,
+        "sigma_tot": sigma_tot,
+        "corr": index_of("CORRELATIONS"),
+    }
+
+
 def sum_file_parser(
         base_obs: str | Path = None,
         sum_file_path: str | Path = None,
@@ -153,9 +229,15 @@ def sum_file_parser(
         - lat_dd : latitude in decimal degrees
         - lon_dd : longitude in decimal degrees
         - hgt : **ellipsoidal** height (metres), not orthometric
-        - coord_sys : coordinate system string (e.g., "IGb20")
+        - coord_sys : coordinate system string, ``"IGb20"`` for an ITRF solve
+          and ``"NAD83"`` for a NAD83 one. Note it carries no version number;
+          the realization is NAD83(CSRS)v8, confirmed both by the ``VLM`` line
+          and by agreement with EPSG:10412 to 0.055 mm.
         - epoch : raw reference epoch token (e.g., "25:211:68415")
         - epoch_decimal_year : same epoch as a decimal year, or None
+        - velocity_model : ``VLM`` token (e.g. "NAD83v80VG"), or None. Present
+          in every .sum, so it names the model available - not the frame used.
+        - epoch_propagated : True when the solution was moved to a fixed epoch
 
         Covariance & Uncertainty
         ------------------------
@@ -163,6 +245,10 @@ def sum_file_parser(
         - cov_PPP_ENU : 3×3 covariance matrix in ENU (m²)
         - PPP_sigma_ECEF : 1-sigma standard deviations [σX, σY, σZ] (metres)
         - PPP_sigma_ENU : 1-sigma standard deviations [σE, σN, σU] (metres)
+
+        When ``epoch_propagated`` is True these include the velocity-grid
+        interpolation error (CSRS-PPP's ``SIG_TOT``) as well as the solution
+        error; see :func:`_parse_pos_header`.
 
     Raises
     ------
@@ -177,11 +263,14 @@ def sum_file_parser(
     # Placeholders
     est_X = est_Y = est_Z = None
     sigma_X = sigma_Y = sigma_Z = None
+    sigma_tot_X = sigma_tot_Y = sigma_tot_Z = None
     rho_XY = rho_XZ = rho_YZ = None
     lat_dd = lon_dd = hgt = None
     coord_sys = None
     epoch_raw = None
     mode = None
+    velocity_model = None
+    layout = None
 
     with open(sum_file_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -206,38 +295,63 @@ def sum_file_parser(
                         "        Reprocess with CSRS-PPP in Static mode."
                     )
 
+            elif parts[0] == "POS" and parts[1] == "CRD":
+                # Column header. Read the layout from it rather than assuming
+                # fixed offsets: when CSRS-PPP propagates the epoch it inserts
+                # a second sigma column, which shifts every correlation one
+                # place to the right. See _parse_pos_header.
+                layout = _parse_pos_header(parts, sum_file_path)
+
             elif parts[0] == "POS" and parts[1] == "X":
-                coord_sys = str((parts[2])) #coordinate system
-                epoch_raw = str(parts[3])  # YY:DDD:SSSSS reference epoch
-                est_X = float(parts[5])
-                sigma_X = float(parts[7])  # 95%
-                
+                if layout is None:
+                    raise ValueError(
+                        f"[ERROR] POS records appear before the 'POS CRD' "
+                        f"column header in {sum_file_path.name}. The column "
+                        "layout cannot be determined, and guessing it risks "
+                        "reading sigmas as correlations."
+                    )
+                coord_sys = str(parts[layout["syst"]])  # coordinate system
+                epoch_raw = str(parts[layout["epoch"]])  # YY:DDD:SSSSS
+                est_X = float(parts[layout["est"]])
+                sigma_X = float(parts[layout["sigma"]])  # 95%
+                if layout["sigma_tot"] is not None:
+                    sigma_tot_X = float(parts[layout["sigma_tot"]])
 
             elif parts[0] == "POS" and parts[1] == "Y":
-                est_Y = float(parts[5])
-                sigma_Y = float(parts[7])
-                rho_XY = float(parts[8])
+                est_Y = float(parts[layout["est"]])
+                sigma_Y = float(parts[layout["sigma"]])
+                if layout["sigma_tot"] is not None:
+                    sigma_tot_Y = float(parts[layout["sigma_tot"]])
+                rho_XY = float(parts[layout["corr"]])
 
             elif parts[0] == "POS" and parts[1] == "Z":
-                est_Z = float(parts[5])
-                sigma_Z = float(parts[7]) 
-                rho_XZ = float(parts[8])
-                rho_YZ = float(parts[9])
+                est_Z = float(parts[layout["est"]])
+                sigma_Z = float(parts[layout["sigma"]])
+                if layout["sigma_tot"] is not None:
+                    sigma_tot_Z = float(parts[layout["sigma_tot"]])
+                rho_XZ = float(parts[layout["corr"]])
+                rho_YZ = float(parts[layout["corr"] + 1])
 
             elif parts[0] == "POS" and parts[1] == "LAT":
-                lat_d = float(parts[7])
-                lat_m = float(parts[8])
-                lat_s = float(parts[9])
+                # DMS rows split each coordinate into three tokens, so the
+                # estimated value starts two places after the scalar offset.
+                i = layout["est"] + 2
+                lat_d, lat_m, lat_s = (float(v) for v in parts[i:i + 3])
                 lat_dd = np.sign(lat_d) * (abs(lat_d) + lat_m / 60 + lat_s / 3600)
 
             elif parts[0] == "POS" and parts[1] == "LON":
-                lon_d = float(parts[7])
-                lon_m = float(parts[8])
-                lon_s = float(parts[9])
+                i = layout["est"] + 2
+                lon_d, lon_m, lon_s = (float(v) for v in parts[i:i + 3])
                 lon_dd = np.sign(lon_d) * (abs(lon_d) + lon_m / 60 + lon_s / 3600)
 
             elif parts[0] == "POS" and parts[1] == "HGT":
-                hgt = float(parts[5])
+                hgt = float(parts[layout["est"]])
+
+            elif parts[0] == "VLM":
+                # Velocity model used for epoch propagation, e.g. NAD83v80VG.
+                # Present in every .sum, not only propagated ones, so it
+                # identifies the model available - not the output frame.
+                velocity_model = str(parts[1])
 
     # Check all parsed
     if None in (est_X, est_Y, est_Z, sigma_X, sigma_Y, sigma_Z, rho_XY, rho_XZ, rho_YZ, lat_dd, lon_dd, hgt, coord_sys):
@@ -245,7 +359,7 @@ def sum_file_parser(
 
     # Covariance Matrix Calculation
     # sigma
-    PPP_sigma_ECEF = np.array([sigma_X, sigma_Y, sigma_Z]) / 1.96 # 95% -> 1 sigma
+    sigma_solution = np.array([sigma_X, sigma_Y, sigma_Z]) / 1.96 # 95% -> 1 sigma
     # correlation (ECEF)
     corr = np.array([
                         [    1.0,  rho_XY,  rho_XZ],
@@ -253,7 +367,29 @@ def sum_file_parser(
                         [ rho_XZ,  rho_YZ,     1.0]
                     ])
     # Covariance Matrix (ECEF)
-    cov_PPP_ECEF = np.diag(PPP_sigma_ECEF) @ corr @ np.diag(PPP_sigma_ECEF)
+    cov_PPP_ECEF = np.diag(sigma_solution) @ corr @ np.diag(sigma_solution)
+
+    # Epoch-propagation error, when CSRS-PPP reported it (SIG_TOT column).
+    #
+    # Only one correlation set is printed, and it is identical between a
+    # propagated and a non-propagated solve of the same data - so those are the
+    # solution correlations, and nothing is published about how the
+    # velocity-grid error correlates across X/Y/Z. It is therefore added as an
+    # independent, diagonal term rather than by rescaling the solution
+    # correlations, which would fabricate off-diagonals that were never
+    # measured. This reproduces SIG_TOT exactly on the diagonal, keeps the
+    # matrix positive semi-definite, and matches how the rest of the pipeline
+    # combines independent error sources (cov_total = cov_PPK + cov_PPP).
+    if sigma_tot_X is not None:
+        sigma_total = np.array([sigma_tot_X, sigma_tot_Y, sigma_tot_Z]) / 1.96
+        # Guard against a negative under the root if the columns ever disagree.
+        var_prop = np.maximum(sigma_total ** 2 - sigma_solution ** 2, 0.0)
+        cov_PPP_ECEF = cov_PPP_ECEF + np.diag(var_prop)
+
+    # Derived from the covariance rather than from the sigma columns directly,
+    # so it stays consistent whether or not the propagation term was added.
+    PPP_sigma_ECEF = np.sqrt(np.diag(cov_PPP_ECEF))
+
     # Covariance Matrix (ENU)
     cov_PPP_ENU = ECEF2ENU_vec(cov_ecef=cov_PPP_ECEF, lat_deg=lat_dd, lon_deg=lon_dd)
     PPP_sigma_ENU = np.sqrt(np.diag(cov_PPP_ENU))
@@ -278,6 +414,10 @@ def sum_file_parser(
         "coord_sys": coord_sys,
         "epoch": epoch_str,
         "epoch_decimal_year": epoch_decimal_year,
+        "velocity_model": velocity_model,
+        # True when CSRS-PPP propagated the solution to a fixed epoch and
+        # reported SIG_TOT; the returned covariance then includes that error.
+        "epoch_propagated": sigma_tot_X is not None,
         "X": est_X,
         "Y": est_Y,
         "Z": est_Z,
