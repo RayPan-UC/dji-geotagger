@@ -30,7 +30,7 @@ pip install -e .
 ## Dependencies
 
 Python ≥ 3.11, plus `pillow`, `defusedxml`, `pandas`, `numpy`, `pyproj`, `tqdm`,
-`requests`, `georinex`, `astropy`, `pymap3d`, `scipy`.
+`requests`, `georinex`, `astropy`, `pymap3d`.
 
 RTKLIB (`convbin`, `rnx2rtkp`) is downloaded automatically on first use.
 

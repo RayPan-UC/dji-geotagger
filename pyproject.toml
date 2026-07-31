@@ -19,8 +19,7 @@ dependencies = [
   "requests",
   "georinex",
   "astropy",
-  "pymap3d",
-  "scipy"
+  "pymap3d"
 ]
 
 classifiers = [
