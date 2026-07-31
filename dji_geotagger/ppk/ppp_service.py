@@ -77,6 +77,9 @@ VALID_SYSREFS = ("ITRF", "NAD83")
 VALID_NAD83_EPOCHS = ("NAD83_CURR", "NAD83_19970101", "NAD83_20020101",
                       "NAD83_20100101", "NAD83_CUSTOM_SELECTED")
 
+# How often the wait loop writes a line, independent of how often it polls.
+_LOG_EVERY_S = 30
+
 
 class PPPServiceError(RuntimeError):
     """Raised when CSRS-PPP rejects a submission or cannot be reached."""
@@ -204,7 +207,7 @@ def submit_rinex(
 def wait_for_results(
     key: str,
     *,
-    poll_interval: int = 30,
+    poll_interval: int = 5,
     timeout: int = 3600,
     progress=None,
 ) -> bytes:
@@ -216,7 +219,11 @@ def wait_for_results(
     key : str
         Processing key from :func:`submit_rinex`.
     poll_interval : int, optional
-        Seconds between polls. Kept generous: this is a shared public service.
+        Seconds between polls. Short because a static session of a few hours
+        typically finishes in well under a minute, and a longer interval means
+        mostly waiting on the poll rather than on the service. A poll that
+        finds nothing is two small GETs. Raise it for long sessions if the
+        wait is going to be measured in tens of minutes anyway.
     timeout : int, optional
         Give up after this many seconds.
     progress : Progress, optional
@@ -251,6 +258,9 @@ def wait_for_results(
     """
     progress = as_progress(progress)
     waited = 0
+    # Polling is frequent; logging is not. Progress updates every cycle, but
+    # the log would otherwise gain a line every few seconds for an hour.
+    next_log = _LOG_EVERY_S
     while True:
         progress.update("ppp", f"Waiting for CSRS-PPP ({waited}s)",
                         current=waited, total=timeout)
@@ -282,7 +292,9 @@ def wait_for_results(
                 f"The job may still be queued. Retrieve it later with this "
                 f"key:\n        {key}")
 
-        logger.info(f"Still processing... ({waited}s elapsed)")
+        if waited >= next_log:
+            logger.info(f"Still processing... ({waited}s elapsed)")
+            next_log += _LOG_EVERY_S
         # Cancellable: a bare sleep would make a cancel request wait out the
         # full poll interval before being noticed.
         progress.sleep(poll_interval)
@@ -403,7 +415,7 @@ def run_online_ppp(
     process_type: str = "Static",
     sysref: str = "ITRF",
     nad83_epoch: str = "NAD83_CURR",
-    poll_interval: int = 30,
+    poll_interval: int = 5,
     timeout: int = 3600,
     progress=None,
 ) -> Path:
