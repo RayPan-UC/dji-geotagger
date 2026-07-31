@@ -39,3 +39,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
+# Without this, setuptools' namespace discovery packages every top-level
+# directory, including ones that are gitignored precisely because they hold
+# local scratch work - test/ and others/ shipped in the 2.1.0 build before
+# this was added. .gitignore does not constrain a build.
+include = ["dji_geotagger*"]

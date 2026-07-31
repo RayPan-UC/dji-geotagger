@@ -1,0 +1,21 @@
+# Keep local working directories out of the distribution.
+#
+# Two separate mechanisms will otherwise pull them in, and neither consults
+# .gitignore:
+#
+#   * setuptools' namespace discovery packages any top-level directory, which
+#     is handled by `include = ["dji_geotagger*"]` in pyproject.toml;
+#   * sdist additionally applies distutils' default template, which matches
+#     test/test*.py regardless of the package list. Hence the prunes below.
+#
+# These directories hold flight data, real station coordinates and scratch
+# scripts. They are gitignored for that reason, and must not be published
+# either.
+prune test
+prune others
+prune notes
+prune assets
+prune dev
+
+global-exclude *.pyc
+global-exclude __pycache__
