@@ -42,5 +42,7 @@ DGT_output/
 
 # PyInstaller output.
 build_exe/
+# PyInstaller's default work directory, used when --workpath is not given.
+build/
 dist_exe/
 packaging/_build_version.txt
