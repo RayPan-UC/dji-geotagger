@@ -1,6 +1,6 @@
 [project]
 name = "dji-geotagger"
-version = "2.1.1"
+version = "3.0.0"
 description = "A precise PPK + MRK-based geotagging tool for DJI RTK drones"
 authors = [{name = "Ray Pan", email = "hungwei.pan2@ucalgary.ca"}]
 license = {text = "BSD-2-Clause"}
@@ -21,6 +21,12 @@ dependencies = [
   "astropy",
   "pymap3d"
 ]
+
+[project.optional-dependencies]
+# The desktop front end. Kept out of the base install so that a headless
+# script - or a CI job - does not pull in a GUI toolkit it will never open.
+#   pip install dji-geotagger[gui]
+gui = ["pywebview>=5"]
 
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -44,3 +50,12 @@ where = ["."]
 # local scratch work - test/ and others/ shipped in the 2.1.0 build before
 # this was added. .gitignore does not constrain a build.
 include = ["dji_geotagger*"]
+
+# The front end is HTML, CSS, JavaScript and a vendored copy of Leaflet. None
+# of it is a Python package, so nothing above picks it up - and without it an
+# installed copy opens a window with no content.
+[tool.setuptools.package-data]
+"dji_geotagger.gui" = [
+  "web/*.html", "web/*.css", "web/*.js",
+  "web/vendor/*.css", "web/vendor/*.js", "web/vendor/images/*",
+]

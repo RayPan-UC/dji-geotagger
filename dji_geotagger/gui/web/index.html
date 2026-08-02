@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>dji-geotagger</title>
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <!-- Cache-busted: the page is served over HTTP by pywebview's own bottle
+       server, so the webview is free to reuse a stylesheet or script from a
+       previous launch. Editing a file and seeing no change is the worst kind
+       of bug to chase, because nothing about it looks like caching. -->
+  <script>
+    (function () {
+      var bust = '?v=' + Date.now();
+      document.write('<link rel="stylesheet" href="style.css' + bust + '">');
+    })();
+  </script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============================ CONTROLS ============================ -->
+  <aside class="panel">
+    <div class="panel-scroll">
+
+      <!-- 1. Base station ------------------------------------------- -->
+      <section class="card" data-step="1">
+        <h2><span class="num">1</span> Base Station</h2>
+
+        <div class="row">
+          <label for="base-file">Observations</label>
+          <input id="base-file" type="text" readonly placeholder="DJI raw log or RINEX observation file">
+          <button class="btn-icon" data-action="pick-base" title="Browse">&#128193;</button>
+        </div>
+
+        <div class="row" id="row-antenna">
+          <label for="antenna-height">Antenna height</label>
+          <input id="antenna-height" class="narrow" type="number" step="0.1" min="0" value="2.00">
+          <span class="unit">m</span>
+          <span class="hint" id="antenna-hint">Measured to the antenna reference point.</span>
+        </div>
+      </section>
+
+      <!-- 2. Base position ------------------------------------------ -->
+      <section class="card" data-step="2">
+        <h2><span class="num">2</span> Base Position</h2>
+
+        <div class="segmented" role="radiogroup">
+          <label><input type="radio" name="base-mode" value="online" checked><span>CSRS-PPP online</span></label>
+          <label><input type="radio" name="base-mode" value="sum"><span>Summary file</span></label>
+          <label><input type="radio" name="base-mode" value="manual"><span>Manual</span></label>
+        </div>
+
+        <!-- (a) online -->
+        <div class="mode-pane" data-mode="online">
+          <div class="row">
+            <label for="ppp-email">Email</label>
+            <span class="field-wrap">
+              <input id="ppp-email" type="email"
+                     placeholder="notification address (required)"
+                     autocomplete="off" spellcheck="false">
+              <ul class="suggest hidden" id="email-suggest"></ul>
+            </span>
+          </div>
+          <div class="row">
+            <label for="ppp-frame">Frame</label>
+            <select id="ppp-frame">
+              <option value="ITRF" selected>ITRF (IGb20)</option>
+              <option value="NAD83">NAD83 (CSRS)</option>
+            </select>
+            <label for="ppp-type" class="inline">Mode</label>
+            <select id="ppp-type">
+              <option value="Static" selected>Static</option>
+              <option value="Kinematic">Kinematic</option>
+            </select>
+          </div>
+          <div class="row hidden" id="row-epoch">
+            <label for="ppp-epoch">Epoch</label>
+            <select id="ppp-epoch">
+              <option value="NAD83_CURR" selected>Observation epoch</option>
+              <option value="NAD83_20100101">2010.0</option>
+              <option value="NAD83_20020101">2002.0</option>
+            </select>
+            <span class="hint">The only step that can propagate an epoch.</span>
+          </div>
+          <div class="row">
+            <label>&nbsp;</label>
+            <label class="chk">
+              <input type="checkbox" id="ppp-force">
+              <span>Submit again even if a result already exists</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- (b) summary file -->
+        <div class="mode-pane hidden" data-mode="sum">
+          <div class="row">
+            <label for="sum-file">Summary file</label>
+            <input id="sum-file" type="text" readonly placeholder=".sum downloaded from CSRS-PPP">
+            <button class="btn-icon" data-action="pick-sum" title="Browse">&#128193;</button>
+          </div>
+        </div>
+
+        <!-- (c) manual -->
+        <div class="mode-pane hidden" data-mode="manual">
+          <div class="row">
+            <label for="man-lat">Latitude</label>
+            <input id="man-lat" type="number" step="any" placeholder="decimal degrees">
+            <label for="man-lon" class="inline">Longitude</label>
+            <input id="man-lon" type="number" step="any" placeholder="decimal degrees">
+          </div>
+          <div class="row">
+            <label for="man-hgt">Ellipsoidal height</label>
+            <input id="man-hgt" type="number" step="any" placeholder="not orthometric">
+            <span class="unit">m</span>
+          </div>
+          <div class="row">
+            <label for="man-frame">Frame</label>
+            <select id="man-frame"></select>
+          </div>
+          <div class="row">
+            <label for="man-epoch">Epoch</label>
+            <input id="man-epoch" type="text" value="2010.0" class="narrow">
+            <span class="hint">Decimal year, e.g. 2010.0. The epoch the
+              published coordinates refer to.</span>
+          </div>
+          <div class="row">
+            <label for="man-sh">Uncertainty</label>
+            <input id="man-sh" class="narrow" type="number" step="0.001" value="0.015">
+            <span class="unit">m H</span>
+            <input id="man-sv" class="narrow" type="number" step="0.001" value="0.030">
+            <span class="unit">m V</span>
+          </div>
+          <p class="note">Defaults are deliberately conservative. Interpreted at
+             the confidence level selected under Output.</p>
+        </div>
+
+        <div class="actions">
+          <span class="resolved-line hidden" id="resolved-line"></span>
+          <button class="btn subtle hidden" data-action="toggle-detail" id="btn-detail">Detail</button>
+          <button class="btn" data-action="resolve" id="btn-resolve">Resolve Base</button>
+        </div>
+
+        <!-- Progress for this step stays in this step. -->
+        <div class="resolve-note hidden" id="resolve-note"></div>
+
+        <!-- Hidden until there is a result, and collapsed even then. -->
+        <div class="result hidden" id="base-result">
+          <div class="result-head">
+            <span class="badge ok" id="res-frame">&mdash;</span>
+            <span class="badge" id="res-tier">&mdash;</span>
+          </div>
+          <table class="coords">
+            <tr><th>Latitude</th>  <td id="res-lat">&mdash;</td></tr>
+            <tr><th>Longitude</th> <td id="res-lon">&mdash;</td></tr>
+            <tr><th>Height</th>    <td id="res-hgt">&mdash;</td></tr>
+          </table>
+          <div class="sigma">
+            <span id="sigma-label">&sigma;</span>
+            <span>E <b id="res-se">&mdash;</b></span>
+            <span>N <b id="res-sn">&mdash;</b></span>
+            <span>U <b id="res-su">&mdash;</b></span>
+            <span class="unit">m</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Flights ------------------------------------------------- -->
+      <section class="card" data-step="3">
+        <h2><span class="num">3</span> Flights</h2>
+
+        <div class="row">
+          <label for="survey-folder">Search in</label>
+          <input id="survey-folder" type="text" readonly placeholder="any folder above the flights">
+          <button class="btn-icon" data-action="pick-survey" title="Add folders to search">&#128193;</button>
+          <button class="btn-icon" data-action="clear-survey" title="Clear">&#10005;</button>
+        </div>
+
+        <div class="list-head hidden" id="flight-head">
+          <label class="chk">
+            <input type="checkbox" id="chk-all" checked>
+            <span>Select all</span>
+          </label>
+          <span class="list-tally" id="flight-tally"></span>
+        </div>
+
+        <div class="list" id="flight-list">
+          <div class="list-empty">No survey folder chosen.</div>
+        </div>
+      </section>
+
+      <!-- 4. Output -------------------------------------------------- -->
+      <section class="card" data-step="4">
+        <h2><span class="num">4</span> Output</h2>
+
+        <div class="row">
+          <label for="crs">Target CRS</label>
+          <input id="crs" type="text" readonly placeholder="same as solved frame">
+          <button class="btn-icon" data-action="pick-crs" title="Select coordinate system">&#9776;</button>
+        </div>
+
+        <div class="row">
+          <label for="confidence" class="with-help">Uncertainty<span
+            class="help" tabindex="0" data-tip="">?</span></label>
+          <select id="confidence">
+            <option value="1">1&sigma; (68.3%, per component)</option>
+            <option value="1.960" selected>95% (k = 1.960, per component)</option>
+            <option value="2.576">99% (k = 2.576, per component)</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label for="workers">Solve in parallel</label>
+          <select id="workers"></select>
+          <span class="hint" id="workers-hint"></span>
+        </div>
+
+        <div class="row">
+          <label for="out-file">Save to</label>
+          <input id="out-file" type="text" readonly placeholder="output CSV">
+          <button class="btn-icon" data-action="pick-output" title="Browse">&#128193;</button>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- footer ------------------------------------------------------- -->
+    <footer class="panel-foot">
+      <!-- overall: where the whole run is -->
+      <div class="prog-head">
+        <span class="prog-stage" id="prog-stage">Idle</span>
+        <span class="prog-count" id="prog-count"></span>
+      </div>
+      <div class="progress hidden" id="overall-track">
+        <div class="bar" id="progress-bar"></div>
+      </div>
+
+      <!-- current step: where the thing running right now is -->
+      <div class="prog-head step" id="step-head">
+        <span class="status" id="status">Ready.</span>
+        <span class="prog-count" id="step-count"></span>
+      </div>
+      <div class="progress step hidden" id="step-track">
+        <div class="bar" id="step-bar"></div>
+      </div>
+
+      <div class="foot-row">
+        <span class="foot-btns">
+          <button class="btn hidden" data-action="cancel">Cancel</button>
+          <button class="btn hidden" data-action="start-over" id="btn-restart">Start Over</button>
+          <button class="btn hidden" data-action="statistics" id="btn-stats">Statistics</button>
+          <button class="btn primary hidden" data-action="reexport" id="btn-reexport">Re-export</button>
+          <button class="btn primary hidden" data-action="open-output" id="btn-open">Open Result Folder</button>
+          <button class="btn primary" data-action="run" id="btn-run">Run</button>
+        </span>
+      </div>
+    </footer>
+  </aside>
+
+  <div class="modal hidden" id="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span id="modal-title"></span>
+        <button class="modal-x" data-action="close-modal" title="Close">&#10005;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="crs-modal">
+    <div class="modal-box crs-box">
+      <div class="modal-head">
+        <span>Select Coordinate System</span>
+        <button class="modal-x" data-action="close-crs" title="Close">&#10005;</button>
+      </div>
+
+      <div class="crs-filter">
+        <input id="crs-search" type="text" placeholder="Filter by name or EPSG code"
+               autocomplete="off" spellcheck="false">
+        <label class="chk">
+          <input type="checkbox" id="crs-all">
+          <span>All areas</span>
+        </label>
+        <label class="chk">
+          <input type="checkbox" id="crs-show-bad">
+          <span>Include unusable</span>
+        </label>
+      </div>
+
+      <div class="crs-tree" id="crs-tree"></div>
+
+      <!-- Building a system that has no EPSG code of its own. -->
+      <div class="crs-define hidden" id="crs-define">
+        <div class="segmented">
+          <label><input type="radio" name="crs-kind" value="utm" checked><span>UTM on a chosen datum</span></label>
+          <label><input type="radio" name="crs-kind" value="rebase"><span>Existing grid, versioned datum</span></label>
+        </div>
+
+        <div class="row">
+          <label for="def-name">Name</label>
+          <input id="def-name" type="text" placeholder="shown in the User-Defined group">
+        </div>
+
+        <div class="def-pane" data-kind="utm">
+          <div class="row">
+            <label for="def-zone">UTM zone</label>
+            <input id="def-zone" class="narrow" type="number" min="1" max="60" value="12">
+            <label class="chk"><input type="checkbox" id="def-south"><span>Southern</span></label>
+          </div>
+          <div class="row">
+            <label for="def-datum">Datum CRS</label>
+            <input id="def-datum" type="text" value="9988">
+            <span class="hint">9988 = ITRF2020, 10412 = NAD83(CSRS)v8</span>
+          </div>
+        </div>
+
+        <div class="def-pane hidden" data-kind="rebase">
+          <div class="row">
+            <label for="def-proj">Grid to rebase</label>
+            <input id="def-proj" type="text" placeholder="e.g. 3780 (Alberta 3TM 114 W)">
+          </div>
+          <div class="row">
+            <label for="def-datum2">Versioned datum</label>
+            <input id="def-datum2" type="text" value="10412">
+            <span class="hint">Replaces the unversioned datum it was published against.</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn subtle" data-action="cancel-define">Back</button>
+          <button class="btn" data-action="save-define">Create</button>
+        </div>
+      </div>
+
+      <div class="crs-verdict hidden" id="crs-verdict"></div>
+
+      <div class="crs-foothelp">
+        <a href="#" data-action="why-crs">Can't find your coordinate system?</a>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn subtle" data-action="define-crs">Define&hellip;</button>
+        <span style="flex:1"></span>
+        <button class="btn" data-action="close-crs">Cancel</button>
+        <button class="btn primary" data-action="accept-crs" id="crs-ok" disabled>OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="splitter" id="splitter" title="Drag to resize"></div>
+
+  <!-- ============================== VIEW ============================== -->
+  <main class="view">
+    <nav class="tabs">
+      <button class="tab active" data-tab="map">Map</button>
+      <button class="tab" data-tab="log">Log</button>
+      <a class="about-link" href="#" data-action="about">About</a>
+    </nav>
+
+    <div class="tab-pane active" data-tab="map">
+      <div class="map-wrap">
+        <div id="map"></div>
+
+        <div class="basemaps">
+          <button class="bm active" data-basemap="satellite">Satellite</button>
+          <button class="bm" data-basemap="osm">OSM</button>
+          <button class="bm" data-basemap="light">Light</button>
+          <button class="bm" data-basemap="dark">Dark</button>
+        </div>
+
+        <div class="map-legend hidden" id="map-legend"></div>
+        <div class="map-note hidden" id="map-note"></div>
+      </div>
+    </div>
+
+    <div class="tab-pane" data-tab="log">
+      <div class="log-wrap">
+        <div class="log-tools">
+          <button class="bm" data-action="copy-log" id="btn-copy-log">Copy</button>
+        </div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </main>
+
+</div>
+<script src="vendor/leaflet.js"></script>
+<script>
+  (function () {
+    var bust = '?v=' + Date.now();
+    /* document.write keeps them in order, which matters: app.js uses MapView. */
+    document.write('<script src="map.js' + bust + '"><\/script>');
+    document.write('<script src="app.js' + bust + '"><\/script>');
+  })();
+</script>
+</body>
+</html>

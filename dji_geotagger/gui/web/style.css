@@ -1,0 +1,1147 @@
+/* dji-geotagger desktop front end.
+   Two columns: a scrolling control panel on the left, map/log on the right.
+   Colours stay muted so that the only saturated things on screen are status
+   signals - a passing CRS, a float ambiguity, a failed MRK match. */
+
+:root {
+  --bg:        #f4f5f7;
+  --card:      #ffffff;
+  --ink:       #1f2328;
+  --ink-soft:  #5b6472;
+  --ink-faint: #8a93a0;
+  --line:      #d8dce2;
+  --line-soft: #e8ebef;
+  --accent:    #1f5fa9;
+  --accent-dk: #17497f;
+  --ok:        #1a7f4b;
+  --warn:      #a86a00;
+  --bad:       #b3261e;
+  --panel-w:   560px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.45 "Segoe UI", -apple-system, system-ui, sans-serif;
+}
+
+/* Selection is enabled at the window level so the log can be copied by hand.
+   Turned off again for the controls, where dragging across a label only ever
+   produces an accidental highlight. */
+body { user-select: none; }
+
+.log,
+.modal-body,
+.coords td,
+.kv dd,
+.resolved-line,
+.list-item .fname,
+input, textarea { user-select: text; }
+
+.app { display: flex; height: 100%; }
+
+/* Scrollbars. The platform default is 17 px of grey furniture down the middle
+   of a two-column layout, which is a lot of weight for a control that is only
+   needed while scrolling. These are thin, track-less, and darken on hover. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+::-webkit-scrollbar-thumb {
+  background: #c6ccd4;
+  border-radius: 5px;
+  border: 2px solid transparent;   /* inset, so the thumb reads as 5 px wide */
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover  { background: #a4adb9; background-clip: content-box; }
+::-webkit-scrollbar-corner       { background: transparent; }
+
+/* Inside the flight list the scrollbar sits beside 12 px rows, so it goes
+   thinner again rather than dominating them. */
+.list::-webkit-scrollbar { width: 7px; }
+.list::-webkit-scrollbar-thumb { border-width: 2px; background: #ccd2da; background-clip: content-box; }
+.list::-webkit-scrollbar-thumb:hover { background: #aab3bf; background-clip: content-box; }
+
+/* ------------------------------- panel ------------------------------- */
+
+.panel {
+  width: var(--panel-w);
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-width: 0;
+  /* Breakpoints here depend on the panel, which the user drags, not on the
+     window - so a container query rather than a media query. */
+  container-type: inline-size;
+  container-name: panel;
+}
+
+/* Drag handle. Wider than it looks - the visible line is 1 px but the grab
+   area is 7, because a 1 px target is a nuisance to hit. */
+.splitter {
+  flex: 0 0 7px;
+  cursor: col-resize;
+  background: var(--line);
+  background-clip: content-box;
+  border-left: 3px solid var(--bg);
+  border-right: 3px solid var(--card);
+}
+
+.splitter:hover, .splitter.dragging { background: var(--accent); }
+
+/* While dragging, the pointer is outside the handle most of the time; this
+   stops text selecting and iframe/map content swallowing the move events. */
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .view { pointer-events: none; }
+
+.panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px 4px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px 14px;
+  margin-bottom: 12px;
+}
+
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* A step whose prerequisite is unmet. Dimmed and inert, but still readable -
+   the point is to show what is coming, not to hide it. */
+.card.locked { background: #fbfcfd; }
+.card.locked > *:not(h2) { opacity: .45; pointer-events: none; user-select: none; }
+.card.locked .num { background: var(--ink-faint); }
+
+/* What the step is currently doing is the one thing that must stay legible
+   while it is frozen - dimming the spinner and the "submitting to CSRS-PPP"
+   note hides the reason everything else is locked. */
+.card.locked > .actions,
+.card.locked > .resolve-note,
+.card.locked > .result {
+  opacity: 1;
+  pointer-events: auto;
+  user-select: auto;
+}
+
+.lock-hint {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-faint);
+  margin-left: auto;
+}
+
+.num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+/* ------------------------------- rows -------------------------------- */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  /* Wrap rather than overflow: a row that cannot fit pushes its last control
+     out of the panel entirely, and there is no scrollbar sideways to find it. */
+  flex-wrap: wrap;
+}
+
+.row:last-child { margin-bottom: 0; }
+
+label {
+  flex: 0 0 118px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+label.inline { flex: 0 0 auto; margin-left: 6px; }
+
+input[type=text], input[type=number], input[type=email], select {
+  flex: 1 1 130px;      /* may shrink, but wraps before becoming unusable */
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+input[readonly] { background: #fafbfc; color: var(--ink-soft); }
+
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(31, 95, 169, .15);
+}
+
+input.narrow      { flex: 0 0 84px; }
+input.narrow-wide { flex: 0 0 150px; }
+
+/* Wrapper so a suggestion list can be positioned against a field that is
+   itself a flex child. */
+.field-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+
+/* Remembered addresses. The native datalist dropdown is drawn by the browser
+   and matches nothing else on screen, so the list is ours. */
+.suggest {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0; right: 0;
+  z-index: 60;
+  margin: 0;
+  padding: 3px;
+  list-style: none;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .13);
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.suggest li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.suggest li:hover,
+.suggest li.active { background: #eaf1fa; }
+
+.suggest .forget {
+  border: none;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.suggest li:hover .forget,
+.suggest li.active .forget { visibility: visible; }
+.suggest .forget:hover { color: var(--bad); }
+
+.unit  { color: var(--ink-faint); font-size: 12px; flex: 0 0 auto; }
+.hint  { color: var(--ink-faint); font-size: 11px; flex: 1 1 120px; }
+
+/* Narrow panel: the label takes its own line so the controls keep a usable
+   width instead of being squeezed into a column of stubs. */
+@container panel (max-width: 470px) {
+  label { flex: 0 0 100%; }
+  label.inline { flex: 0 0 100%; margin-left: 0; }
+  .hint { flex: 0 0 100%; }
+  .with-help { flex: 0 0 100%; }
+}
+
+.note {
+  margin: 8px 0 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Caveats that matter once and then only get in the way. On the label rather
+   than under the field, so the row keeps its height whether or not anyone
+   ever reads it. Focusable, so it is reachable without a mouse. */
+/* Superscript on the label it belongs to. A click on a label is forwarded to
+   its control, so the icon swallows its own clicks in app.js - otherwise
+   pressing it would open the very dropdown it is explaining. */
+.help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px; height: 13px;
+  margin-left: 3px;
+  position: relative;
+  top: -5px;
+  border-radius: 50%;
+  background: var(--line);
+  color: var(--card);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: help;
+}
+
+.help:hover, .help:focus { background: var(--accent); outline: none; }
+
+.help::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 7px);
+  left: -6px;
+  z-index: 80;
+  width: 250px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: #2b3038;
+  color: #eef1f4;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+  text-align: left;
+  /* Newlines in data-tip are honoured, so a caveat with three distinct claims
+     reads as three lines instead of one wrapped paragraph. */
+  white-space: pre-line;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .26);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .12s;
+}
+
+.help:hover::after, .help:focus::after { opacity: 1; visibility: visible; }
+
+.hidden { display: none !important; }
+
+/* ---------------------------- segmented ------------------------------ */
+
+.segmented {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.segmented label { flex: 1; margin: 0; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+
+.segmented span {
+  display: block;
+  padding: 5px 4px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: #fafbfc;
+  border-right: 1px solid var(--line);
+  cursor: pointer;
+  user-select: none;
+}
+
+.segmented label:last-child span { border-right: none; }
+.segmented input:checked + span { background: var(--accent); color: #fff; }
+
+/* ----------------------------- buttons ------------------------------- */
+
+.actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.btn {
+  padding: 5px 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled)  { background: #f0f2f5; }
+.btn:disabled              { color: var(--ink-faint); cursor: default; }
+.btn.subtle                { font-size: 12px; padding: 4px 11px; }
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  padding: 6px 22px;
+  font-weight: 600;
+}
+
+.btn.primary:hover:not(:disabled) { background: var(--accent-dk); }
+.btn.primary:disabled { background: #a9b4c2; border-color: #a9b4c2; color: #eef1f4; }
+
+.btn-icon {
+  flex: 0 0 auto;
+  width: 28px; height: 27px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-soft);
+}
+
+.btn-icon:hover { background: #f0f2f5; }
+
+/* --------------------------- base result ----------------------------- */
+
+.result {
+  margin-top: 10px;
+  border: 1px solid #cfe6da;
+  border-radius: 5px;
+  background: #f5faf7;
+  padding: 10px 12px;
+}
+
+/* Collapsed summary, shown in the button row so the section stays one line
+   tall once it has succeeded. */
+.resolved-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ok);
+  align-self: center;
+}
+
+/* Feedback for a step belongs beside that step. The footer bar tracks the
+   run, and animating it for a base resolve invites the reading that the run
+   has started. */
+.resolve-note {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 5px;
+  background: #eff4fa;
+  border: 1px solid #d6e3f2;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.resolve-note.bad { background: #fbeceb; border-color: #f0cfcc; color: var(--bad); }
+
+.btn.retry { border-color: #e6b8b4; color: var(--bad); }
+.btn.retry:hover:not(:disabled) { background: #fbeceb; }
+
+/* Spinner shown inside the button while a resolve is in flight. */
+.btn.working::before {
+  content: '';
+  display: inline-block;
+  width: 10px; height: 10px;
+  margin-right: 7px;
+  vertical-align: -1px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.result-head { display: flex; gap: 6px; margin-bottom: 8px; }
+
+.badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: #e8ebef;
+  color: var(--ink-soft);
+}
+
+.badge.ok   { background: #d9efe3; color: var(--ok); }
+.badge.warn { background: #f7ecd4; color: var(--warn); }
+
+.coords { border-collapse: collapse; width: 100%; }
+
+.coords th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--ink-soft);
+  font-size: 12px;
+  padding: 1px 0;
+  width: 110px;
+}
+
+.coords td {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  padding: 1px 0;
+}
+
+.sigma {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.sigma b { font-family: Consolas, monospace; color: var(--ink); font-weight: 500; }
+
+/* ---------------------------- flight list ---------------------------- */
+
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 6px;
+}
+
+.chk {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.chk input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+.list-tally { font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+.list {
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  max-height: 190px;
+  overflow-y: auto;
+  background: #fafbfc;
+}
+
+.list-empty { padding: 14px; text-align: center; color: var(--ink-faint); font-size: 12px; }
+
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.list-item:last-child  { border-bottom: none; }
+.list-item:hover       { background: #f0f3f7; }
+
+/* An unchecked flight stays legible but visibly out of the run. */
+.list-item.off .fname,
+.list-item.off .fcount { color: var(--ink-faint); }
+
+.list-item .fname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;          /* keep the distinctive tail of long DJI names */
+  text-align: left;
+}
+
+.list-item .fcount { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.list-item .fmrk.ok  { color: var(--ok); }
+.list-item .fmrk.bad { color: var(--bad); }
+
+/* Coverage warning. A button, not decoration - it opens the list of exposures
+   the base station was not observing. */
+.fwarn {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--warn);
+  cursor: pointer;
+}
+
+.fwarn:hover { color: #7d4e00; }
+
+/* The whole row is tinted, so a flagged flight is findable by scrolling
+   rather than by reading every line for a small glyph. */
+.list-item.warn        { background: #fdf6e3; }
+.list-item.warn:hover  { background: #f9eecd; }
+
+/* ------------------------------- modal ------------------------------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 24, 30, .35);
+}
+
+.modal-box {
+  width: min(640px, 86vw);
+  max-height: 74vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border-radius: 7px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .3);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  font-weight: 600;
+}
+
+.modal-x {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.modal-x:hover { color: var(--ink); }
+
+.modal-body {
+  overflow-y: auto;
+  padding: 12px 14px 16px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+}
+
+.modal-body .names {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #fafbfc;
+  border: 1px solid var(--line-soft);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.modal-body b { color: var(--ink); }
+
+/* ---------------------------- CRS picker ----------------------------- */
+
+/* Below the general modal: the explanation is opened from inside the picker
+   and has to appear over it, and both are .modal. */
+#crs-modal { z-index: 1900; }
+
+.crs-box { width: min(720px, 90vw); height: min(620px, 88vh); }
+
+.crs-filter {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.crs-filter input[type=text] { flex: 1; }
+
+.crs-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.crs-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: #f7f8fa;
+  cursor: pointer;
+  user-select: none;
+}
+
+.crs-group .caret { font-size: 9px; color: var(--ink-faint); width: 8px; }
+.crs-group .count { margin-left: auto; font-weight: 400; letter-spacing: 0; }
+
+.crs-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 14px 4px 30px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.crs-item:hover    { background: #f0f3f7; }
+.crs-item.selected { background: #e4edf8; }
+
+.crs-item .cmark { flex: 0 0 12px; font-size: 11px; color: var(--ok); }
+.crs-item.unusable .cmark { color: #c9ccd1; }
+.crs-item.unusable .cname { color: var(--ink-faint); }
+.crs-item.unusable .ccode { color: #c9ccd1; }
+
+.crs-item .cname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crs-item .ccode { color: var(--ink-faint); font-family: Consolas, monospace; font-size: 11px; }
+
+.crs-empty { padding: 20px; text-align: center; color: var(--ink-faint); font-size: 12px; }
+
+.crs-define {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: #fafbfc;
+}
+
+.crs-define .segmented { margin-bottom: 10px; }
+.crs-define .actions { margin-top: 10px; }
+
+/* The description pane doubles as the verdict: OK stays disabled until
+   whatever is highlighted has survived a real transformation. */
+.crs-verdict {
+  flex: 0 0 auto;
+  min-height: 76px;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 10px 14px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+  white-space: pre-line;
+}
+
+.crs-verdict.ok  { background: #f2f9f5; color: var(--ok); }
+.crs-verdict.bad { background: #fdf3f2; color: var(--bad); }
+
+.crs-foothelp {
+  padding: 8px 14px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11px;
+}
+
+.crs-foothelp a { color: var(--accent); text-decoration: none; }
+.crs-foothelp a:hover { text-decoration: underline; }
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* Key/value blocks. A grid rather than a table: the label column is fixed, so
+   a long label wraps within its own column instead of squeezing the value, and
+   values stay aligned down the whole dialog. */
+.kv {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 5px 16px;
+  align-items: baseline;
+}
+
+.kv dt {
+  color: var(--ink-soft);
+  font-size: 12px;
+  /* Flight names are long and unbroken; without this they run straight over
+     the value column. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.kv dd {
+  margin: 0;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;      /* a Windows path must wrap, not scroll */
+}
+
+.kv-group {
+  margin: 0 0 6px;
+  padding-top: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line-soft);
+}
+
+.kv-group:first-child { padding-top: 0; border-top: none; }
+
+/* ----------------------------- verdict ------------------------------- */
+
+.verdict {
+  margin: -2px 0 8px 126px;
+  padding: 6px 9px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.verdict.ok  { background: #eaf5ef; color: var(--ok);  }
+.verdict.bad { background: #fbeceb; color: var(--bad); }
+
+/* ------------------------------ footer ------------------------------- */
+
+.panel-foot {
+  border-top: 1px solid var(--line);
+  background: var(--card);
+  padding: 11px 16px 13px;
+}
+
+.prog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.prog-stage {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.panel-foot.busy .prog-stage { color: var(--accent); }
+
+/* Nothing running: the stage row has nothing to say, so it says nothing. */
+.panel-foot.idle .prog-head { display: none; }
+
+.prog-count {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress {
+  height: 8px;
+  border-radius: 4px;
+  background: #e4e8ed;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .06);
+}
+
+.bar {
+  height: 100%;
+  width: 0;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #2b74c4, var(--accent));
+  transition: width .25s ease;
+}
+
+/* Some stages have no countable total - a CSRS-PPP job sits in a queue for an
+   unknown time. ProgressEvent.fraction is None there, and a bar frozen at some
+   arbitrary width would read as a hang. Stripes say "working, length unknown". */
+.bar.indeterminate {
+  width: 100%;
+  background-image: linear-gradient(115deg,
+      rgba(255, 255, 255, .32) 25%, transparent 25%,
+      transparent 50%, rgba(255, 255, 255, .32) 50%,
+      rgba(255, 255, 255, .32) 75%, transparent 75%);
+  background-size: 22px 22px;
+  animation: stripes 900ms linear infinite;
+}
+
+.bar.done   { background: linear-gradient(180deg, #2a9a63, var(--ok)); }
+.bar.failed { background: linear-gradient(180deg, #c8352c, var(--bad)); }
+
+@keyframes stripes { from { background-position: 0 0; } to { background-position: 22px 0; } }
+
+/* The step bar is deliberately lighter and thinner than the overall one: two
+   bars of equal weight read as two equally important numbers, and the one
+   that answers "how much longer" is the top one. */
+.prog-head.step { margin: 9px 0 5px; }
+
+.progress.step { height: 5px; border-radius: 3px; background: #edf0f4; box-shadow: none; }
+.progress.step .bar { background: #7fa9d8; }
+.progress.step .bar.indeterminate { background-color: #7fa9d8; }
+
+.foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 11px;
+}
+
+.foot-btns { display: flex; gap: 8px; flex: 0 0 auto; }
+
+.status {
+  color: var(--ink-soft);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------- view -------------------------------- */
+
+.view { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--card); }
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.tab {
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--ink-soft);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.about-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.about-head .gh { color: var(--ink-faint); line-height: 0; }
+.about-head .gh:hover { color: var(--ink); }
+
+.about-link {
+  margin-left: auto;
+  align-self: center;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-decoration: none;
+}
+
+.about-link:hover { color: var(--accent); }
+
+.tab-pane { display: none; flex: 1; min-height: 0; }
+.tab-pane.active { display: flex; }
+
+.map-wrap { position: relative; flex: 1; min-height: 0; }
+
+#map {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px) 0 0 / 44px 44px,
+    linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 44px 44px,
+    #fbfcfd;
+}
+
+/* Basemap switch. Sits over the map rather than in a toolbar - it belongs to
+   the map, and the panel already has enough controls competing for attention. */
+.basemaps {
+  position: absolute;
+  top: 10px; right: 10px;
+  z-index: 500;                 /* above tiles and paths, below popups */
+  display: flex;
+  border-radius: 5px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .28);
+}
+
+.bm {
+  border: none;
+  padding: 5px 11px;
+  font: 12px/1 "Segoe UI", system-ui, sans-serif;
+  background: rgba(255, 255, 255, .94);
+  color: var(--ink-soft);
+  cursor: pointer;
+  border-right: 1px solid var(--line-soft);
+}
+
+.bm:last-child   { border-right: none; }
+.bm:hover        { background: #fff; }
+.bm.active       { background: var(--accent); color: #fff; }
+
+/* Quality bands for the camera centres. Bottom-left, clear of the basemap
+   switch and Leaflet's own attribution. */
+.map-legend {
+  position: absolute;
+  left: 10px; bottom: 22px;
+  z-index: 500;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .93);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .24);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.legend-row { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+.legend-row:last-child { margin-bottom: 0; }
+
+.map-legend .swatch {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.map-note {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 400;
+  max-width: 320px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .16);
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* --------------------------- map popups ------------------------------ */
+
+.pop-name { font-weight: 600; font-size: 12px; color: var(--ink); }
+.pop-sub  { font-size: 11px; color: var(--ink-faint); margin-bottom: 7px; }
+
+.pop-thumb {
+  min-height: 20px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.pop-thumb img {
+  display: block;
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid var(--line-soft);
+}
+
+.pop-table { border-collapse: collapse; width: 100%; }
+
+.pop-table th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--ink-soft);
+  font-size: 11px;
+  padding: 1px 10px 1px 0;
+  white-space: nowrap;
+}
+
+.pop-table td {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+  color: var(--ink);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Leaflet's own furniture, toned down to match the panel. */
+.leaflet-container { font: 12px "Segoe UI", system-ui, sans-serif; background: #eef0f3; }
+.leaflet-control-attribution { font-size: 10px; background: rgba(255, 255, 255, .75) !important; }
+
+.log-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
+
+/* Floated over the log rather than in a toolbar of its own: the log is the
+   whole pane, and a strip above it would cost a row of text on every screen
+   to hold two buttons used occasionally. */
+.log-tools {
+  position: absolute;
+  top: 8px; right: 14px;
+  z-index: 10;
+  display: flex;
+  gap: 6px;
+  border-radius: 5px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
+}
+
+.log-tools .bm { border-right: none; }
+
+.log {
+  flex: 1;
+  margin: 0;
+  padding: 8px 0;
+  overflow: auto;
+  font: 12px/1.55 Consolas, "Cascadia Mono", monospace;
+  color: var(--ink-soft);
+}
+
+/* A fixed-width level column, so the messages line up and the eye can run
+   down them instead of hunting for where each one starts. */
+.logline {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 10px;
+  padding: 1px 14px;
+}
+
+.loglevel {
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-align: center;
+  border-radius: 3px;
+  padding: 1px 0;
+  height: 15px;
+  align-self: start;
+  margin-top: 2px;
+  background: #eceff3;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.logmsg { white-space: pre-wrap; word-break: break-word; }
+
+.lvl-warn  { background: #fdf8ec; }
+.lvl-warn  .loglevel { background: #f6e2b8; color: #8a5a00; }
+.lvl-warn  .logmsg   { color: var(--warn); }
+
+.lvl-error { background: #fdf0ef; }
+.lvl-error .loglevel { background: #f3ccc8; color: #97231c; }
+.lvl-error .logmsg   { color: var(--bad); }
+
+.lvl-debug .loglevel,
+.lvl-debug .logmsg { color: #a9b1bb; }
