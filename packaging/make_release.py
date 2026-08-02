@@ -17,6 +17,13 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist_exe" / "dji-geotagger"
 OUT = ROOT / "dist_exe"
 
+# Anything the application writes beside itself when it is run from the build
+# directory - which is exactly how it gets tested. DGT_output holds a whole
+# survey: RINEX, PPK solutions, ephemerides, the lot. Testing the build before
+# releasing it is the normal thing to do, so without this the normal thing
+# quietly publishes someone's flight data.
+RUNTIME_OUTPUT = {"DGT_output"}
+
 
 def main() -> int:
     if not (DIST / "dji-geotagger.exe").exists():
@@ -34,12 +41,22 @@ def main() -> int:
     # Deflated rather than stored: the payload is mostly compiled extensions
     # and a 9 MB PROJ database, which halve.
     total = 0
+    skipped = 0
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path in sorted(DIST.rglob("*")):
-            if path.is_file():
-                zf.write(path, Path("dji-geotagger") / path.relative_to(DIST))
-                total += 1
+            if not path.is_file():
+                continue
+            relative = path.relative_to(DIST)
+            if RUNTIME_OUTPUT.intersection(relative.parts):
+                skipped += 1
+                continue
+            zf.write(path, Path("dji-geotagger") / relative)
+            total += 1
     print(f"{archive.name}: {total} files, {archive.stat().st_size/1048576:.0f} MB")
+    if skipped:
+        # Loud, not silent: a file left over from testing is a thing to notice.
+        print(f"  excluded {skipped} run-time output files "
+              f"({', '.join(sorted(RUNTIME_OUTPUT))})")
 
     # Checksums for everything meant to be downloaded, so a truncated or
     # tampered download is detectable rather than merely unlikely.
