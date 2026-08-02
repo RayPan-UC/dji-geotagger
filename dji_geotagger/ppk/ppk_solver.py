@@ -269,12 +269,55 @@ def base_pos_to_rtklib_conf(
     else:
         raise ValueError("[ERROR] Base position not provided. Supply sum_file_path, base_obs, or ant2-pos1/2/3 in user_conf.")
     
-    return  {
-                "ant2-postype": "xyz",
-                "ant2-pos1": X,
-                "ant2-pos2": Y,
-                "ant2-pos3": Z,
-            }
+    conf = {
+        "ant2-postype": "xyz",
+        "ant2-pos1": X,
+        "ant2-pos2": Y,
+        "ant2-pos3": Z,
+    }
+
+    # The coordinate above describes the marker, not the antenna, whenever the
+    # observation header carries a delta - CSRS-PPP subtracts it before
+    # reporting. RTKLIB has to be told the same offset or it will place the
+    # antenna at the marker and drag every rover position down with it.
+    #
+    # Read back from the header rather than taken as an argument, so it holds
+    # for observations this package did not convert.
+    delta = read_antenna_delta(base_obs) if base_obs else None
+    if delta is not None and any(abs(v) > 1e-6 for v in delta):
+        up, east, north = delta
+        conf.update({"ant2-antdelu": up,
+                     "ant2-antdele": east,
+                     "ant2-antdeln": north})
+        logger.info(
+            f"Base antenna delta from the RINEX header: H={up:.4f} "
+            f"E={east:.4f} N={north:.4f} m (position refers to the marker).")
+
+    return conf
+
+
+def read_antenna_delta(obs_file: str | Path) -> tuple[float, float, float] | None:
+    """
+    Read ``ANTENNA: DELTA H/E/N`` from a RINEX observation header.
+
+    Returns ``(up, east, north)`` in metres, or None when the file has no such
+    line. The values are the offset from the marker to the antenna reference
+    point, which is the same convention RTKLIB uses for ``ant2-antdel*``, so
+    they transfer directly.
+    """
+    try:
+        with Path(obs_file).open("r", errors="ignore") as handle:
+            for line in handle:
+                if "ANTENNA: DELTA H/E/N" in line:
+                    values = line[:60].split()
+                    if len(values) >= 3:
+                        return tuple(float(v) for v in values[:3])
+                    return None
+                if "END OF HEADER" in line:
+                    break
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 def no_base_pos_warn():

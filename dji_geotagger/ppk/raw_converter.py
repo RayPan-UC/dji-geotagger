@@ -143,7 +143,9 @@ def raw2rinex(
         str(convbin),
         "-r", "rtcm3",
         "-tr", dt.strftime("%Y/%m/%d %H:%M:%S"),
-        "-hd", f"0/0/{ah}",
+        # convbin documents this as "antenna delta h/e/n", height first. It is
+        # also not enough on its own - see _force_antenna_delta below.
+        "-hd", f"{ah}/0/0",
         "-o", str(obs_path),
         "-n", str(nav_path),
         str(input_path)
@@ -166,13 +168,64 @@ def raw2rinex(
             f"[ERROR] Failed to convert {input_path} (convbin exit "
             f"{returncode})")
     logger.info(f"✓ Converted. Output: {rinex_dir}")
-    
+
+    _force_antenna_delta(obs_path, ah)
+
     if type_dir == "base":
         PPP_help(obs_path)
     
 
     return obs_path, nav_path
     
+
+def _force_antenna_delta(obs_path: Path, height: float,
+                         east: float = 0.0, north: float = 0.0) -> None:
+    """
+    Write the antenna delta into a converted RINEX header.
+
+    ``convbin -hd`` is not sufficient for an RTCM stream. RTCM message 1006
+    carries an antenna height of its own, and the decoder applies it over
+    anything given on the command line. A DJI DRTK-3 broadcasts 1006 with that
+    field set to 0.0000, so the measured height was silently discarded and the
+    header always read::
+
+        0.0000        0.0000        0.0000      ANTENNA: DELTA H/E/N
+
+    That is not cosmetic. With no delta the solution refers to the antenna
+    reference point rather than the ground mark, so a 2 m tripod put the base
+    2 m too high - and the base height propagates into every camera position.
+    CSRS-PPP shows the value it received as "ARP to Marker" on the report.
+
+    The line is fixed-format: three F14.4 fields, label at column 61.
+    """
+    label = "ANTENNA: DELTA H/E/N"
+    replacement = f"{height:14.4f}{east:14.4f}{north:14.4f}".ljust(60) + label
+
+    try:
+        lines = obs_path.read_text(errors="ignore").splitlines(keepends=True)
+    except OSError as exc:
+        logger.warning(f"[WARN] Could not set the antenna delta: {exc}")
+        return
+
+    for index, line in enumerate(lines):
+        if label in line:
+            if line.rstrip("\r\n") == replacement:
+                return                      # already right, leave the file alone
+            ending = "\r\n" if line.endswith("\r\n") else "\n"
+            lines[index] = replacement + ending
+            obs_path.write_text("".join(lines))
+            logger.info(
+                f"Antenna delta set to H={height:.4f} E={east:.4f} "
+                f"N={north:.4f} m in {obs_path.name}")
+            return
+
+        if "END OF HEADER" in line:
+            break
+
+    logger.warning(
+        f"[WARN] No '{label}' line in {obs_path.name}; antenna height "
+        f"{height:.4f} m not applied.")
+
 
 def PPP_help(obs_path: Path):
     """
