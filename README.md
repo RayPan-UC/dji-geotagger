@@ -222,7 +222,9 @@ Skipped flights are listed in `geotag_df.attrs["failed_flights"]`.
 The reported per-image uncertainty combines **two independent error sources as
 full 3×3 covariance matrices in ECEF**, then rotates the result into local ENU:
 
-$$\Sigma_{\text{total}} = \Sigma_{\text{PPK}} + \Sigma_{\text{PPP}}, \qquad \Sigma_{\text{ENU}} = R\,\Sigma_{\text{total}}\,R^{\top}$$
+$$\Sigma_{\text{total}} = \Sigma_{\text{PPK}} + \Sigma_{\text{PPP}}$$
+
+$$\Sigma_{\text{ENU}} = R \Sigma_{\text{total}} R^{\top}$$
 
 - $\Sigma_{\text{PPK}}$ — per-epoch rover precision from the RTKLIB `.pos` solution
 - $\Sigma_{\text{PPP}}$ — base station precision from the CSRS-PPP `.sum`, including the epoch-propagation term when one applies
