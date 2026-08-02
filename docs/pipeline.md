@@ -199,8 +199,33 @@ or after the last PPK epoch gets NaN position and NaN sigma. Extending the
 trajectory past its ends would produce a plausible-looking number with no
 observation behind it, which is worse than an obvious gap.
 
-Trajectory gaps in the middle are not treated specially: a longer gap simply
-means a longer linear interpolation, and the error grows with its square.
+**A gap longer than five seconds is refused too.** Being inside the overall
+span is not the same as being observed once several flights are joined, and
+interpolating across a break between two sorties would return a confident
+position that nothing supports. Five seconds sits above the short dropouts a
+real trajectory contains — two to three seconds were measured on the
+reference survey — and far below any genuine break.
+
+### One recording, several files
+
+DJI rolls the photo folder every 999 images and starts a new GNSS file at the
+same time, but closes the old one a few seconds *before* the last exposures
+are written into that folder. Measured across one session: the observation
+files abut to within a single 5 Hz epoch, so the recording never stopped —
+yet each folder's last one to eight exposures were observed only in the next
+folder's file.
+
+Solved folder by folder, those exposures have no trajectory to land on and
+come out empty. So the trajectories are **merged before any exposure is
+placed**: every flight is solved independently, as before, and the results are
+concatenated and sorted into the single recording they came from.
+
+If a flight's neighbour is not part of the run, its observations are still
+needed. `geotag()` accepts `extra_obs_folders` for exactly that: those folders
+are solved for their trajectory alone and produce no rows. The desktop front
+end works out which neighbours abut the selection and passes them, so
+processing a subset of a survey does not quietly lose the exposures at its
+edges.
 
 ## What travels with the coordinates
 
@@ -308,14 +333,21 @@ alongside a correlation matrix.
 Applying a confidence level is then a multiplication, and which multiplier is
 correct depends on **how many components the statement covers**:
 
-| Level | Per component (1-D) | Horizontal (2-D) | 3-D |
-|---|---|---|---|
-| 68.3% / 1σ | 1.000 | — | — |
-| 95% | 1.960 | 2.448 | 2.796 |
-| 99% | 2.576 | 3.035 | 3.368 |
+| | 1σ (68.27%) | 90% | 95% | 99% |
+|---|---|---|---|---|
+| **1-D** per component | 1.000 | 1.645 | 1.960 | 2.576 |
+| **2-D** horizontal | 1.515 | 2.146 | 2.448 | 3.035 |
+| **3-D** spatial | 1.878 | 2.500 | 2.795 | 3.368 |
 
-The columns are per component, so the 1-D multipliers are the ones used.
-A 2-D value quoted per axis would overstate each axis by 25%.
+Each entry is $\sqrt{\chi^2_{df}(p)}$ — the square root of the chi-square
+quantile at probability $p$, with $df$ equal to the number of components the
+statement covers. For $df = 1, 2, 3$ that is the normal, Rayleigh and Maxwell
+distribution respectively.
+
+`sigma_E/N/U` are per component, so the **1-D row** is the one that applies.
+Quoting a 2-D value per axis overstates each axis by 25% at 95%; conversely,
+a column scaled with k = 1.960 covers 95% on each axis but only 85% of a
+horizontal ellipse and 72% of a 3-D one.
 
 Two details that matter more than they look:
 
