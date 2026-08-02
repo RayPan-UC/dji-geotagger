@@ -35,6 +35,7 @@ awaited.
 from __future__ import annotations
 
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -42,6 +43,24 @@ from dataclasses import dataclass
 
 class OperationCancelled(Exception):
     """Raised at a checkpoint when the caller has asked to stop."""
+
+
+def _hide_console(kwargs: dict) -> None:
+    """
+    Stop a console child from opening a window of its own, on Windows.
+
+    RTKLIB's tools are console programs. Started from a windowed process -
+    which is what a packaged GUI is - each one flashes up a command prompt,
+    and a nineteen-flight run flashes nineteen of them.
+
+    Output is already piped or discarded at every call site, so there is
+    nothing to see in that window in any case. Left alone if the caller has
+    asked for particular flags.
+    """
+    if sys.platform != "win32" or "creationflags" in kwargs:
+        return
+    # 0x08000000, defined only on Windows builds of the standard library.
+    kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
 @dataclass(frozen=True)
@@ -208,6 +227,8 @@ class Progress:
             If cancelled; the child is terminated first, escalating to kill
             if it does not exit promptly.
         """
+        _hide_console(kwargs)
+
         if not self.is_active and on_line is None:
             # Nothing to cancel and nothing to report: keep the simple path.
             return subprocess.run(cmd, **kwargs).returncode
