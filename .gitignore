@@ -43,3 +43,4 @@ DGT_output/
 # PyInstaller output.
 build_exe/
 dist_exe/
+packaging/_build_version.txt

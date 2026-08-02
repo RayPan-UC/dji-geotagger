@@ -651,7 +651,11 @@ class Api:
         try:
             version = metadata.version("dji-geotagger")
         except metadata.PackageNotFoundError:
-            version = "development"
+            # A frozen build has no installed distribution; the packager
+            # leaves the version beside the package instead.
+            stamp = Path(__file__).resolve().parents[1] / "_build_version.txt"
+            version = (stamp.read_text(encoding="utf-8").strip()
+                       if stamp.exists() else "development")
 
         rtklib = _RTKLIB_LICENSE
         return {

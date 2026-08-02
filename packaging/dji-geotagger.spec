@@ -7,11 +7,32 @@
 # launch, so the window takes seconds to appear and leaves copies behind. The
 # directory build starts immediately and zips to about the same size.
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+# Build the repository, not whatever happens to be installed. PyInstaller runs
+# the spec from this directory, where dji_geotagger is not importable at all -
+# collect_data_files then reported "not a package" and returned nothing, and
+# the analysis had no source to follow. Both need the root on the path.
+_ROOT = Path(SPECPATH).parent
+sys.path.insert(0, str(_ROOT))
+
 datas = []
+
+# A frozen application has no installed distribution, so importlib.metadata
+# cannot answer for it and the About box would read "development". The version
+# is taken from pyproject at build time - one source, no second place to keep
+# in step - and dropped in beside the package.
+import tomllib
+
+_VERSION = tomllib.loads(
+    (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+)["project"]["version"]
+_VERSION_FILE = Path(SPECPATH) / "_build_version.txt"
+_VERSION_FILE.write_text(_VERSION, encoding="utf-8")
+datas.append((str(_VERSION_FILE), "dji_geotagger"))
 
 # RTKLIB. Only the two command-line tools the pipeline actually runs: the bin
 # directory as shipped is 129 MB of GUI applications - rtknavi, rtkplot and
@@ -24,7 +45,7 @@ datas = []
 #
 # LICENSE.txt travels with them: RTKLIB is BSD-2-Clause and a binary
 # distribution has to carry the notice.
-_RTKLIB_BIN = Path(SPECPATH).parent / "dji_geotagger" / "tools" / "RTKLIB" / "bin"
+_RTKLIB_BIN = _ROOT / "dji_geotagger" / "tools" / "RTKLIB" / "bin"
 _RTKLIB_DEST = "dji_geotagger/tools/RTKLIB/bin"
 for _name in ("convbin.exe", "rnx2rtkp.exe", "LICENSE.txt"):
     _source = _RTKLIB_BIN / _name
@@ -50,16 +71,22 @@ datas += collect_data_files("dji_geotagger.gui", includes=["web/**/*"])
 # The RTKLIB configuration defaults live in the package.
 datas += collect_data_files("dji_geotagger.config")
 
-hiddenimports = []
-# georinex reaches for backends by name, so the analysis does not see them.
-hiddenimports += collect_submodules("xarray")
-hiddenimports += ["netCDF4", "cftime", "defusedxml", "defusedxml.ElementTree"]
-# pymap3d and astropy do the same for their own submodules.
-hiddenimports += collect_submodules("pymap3d")
+# Named individually rather than with collect_submodules("xarray"): that
+# imports every submodule of the package, optional backend integrations
+# included, and those reach for whatever the build machine happens to have.
+# It dragged in torch, transformers, onnxruntime, pyarrow and llvmlite -
+# 500 MB of unrelated libraries in a bundle that never calls any of them.
+hiddenimports = [
+    "netCDF4",
+    "cftime",
+    "defusedxml",
+    "defusedxml.ElementTree",
+    "xarray.backends.netCDF4_",
+]
 
 a = Analysis(
     ["launch_gui.py"],
-    pathex=[],
+    pathex=[str(_ROOT)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -67,7 +94,15 @@ a = Analysis(
     runtime_hooks=[],
     # RTKLIB is fetched on first use rather than bundled, so nothing here
     # needs its binaries. Tests and notebooks are excluded outright.
-    excludes=["tkinter", "matplotlib", "IPython", "pytest", "notebook"],
+    # Belt and braces. Nothing here is a dependency; they are excluded so a
+    # build machine that happens to have them cannot leak them into the
+    # bundle through some optional import path.
+    excludes=[
+        "tkinter", "matplotlib", "IPython", "pytest", "notebook",
+        "torch", "transformers", "onnxruntime", "pyarrow", "llvmlite",
+        "numba", "nltk", "av", "sklearn", "scipy", "sympy", "zarr",
+        "dask", "bottleneck", "flox", "cartopy", "seaborn", "plotly",
+    ],
     noarchive=False,
 )
 
