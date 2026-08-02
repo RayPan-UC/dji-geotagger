@@ -33,10 +33,11 @@
         </div>
 
         <div class="row" id="row-antenna">
-          <label for="antenna-height">Antenna height</label>
-          <input id="antenna-height" class="narrow" type="number" step="0.1" min="0" value="2.00">
+          <label for="antenna-height" class="with-help">Antenna height<span
+            class="help" id="help-antenna" tabindex="0" data-tip="">?</span></label>
+          <input id="antenna-height" class="narrow" type="number" step="0.1" min="0" value="0.00">
           <span class="unit">m</span>
-          <span class="hint" id="antenna-hint">Measured to the antenna reference point.</span>
+          <span class="hint" id="antenna-hint">Ground mark to the antenna reference point.</span>
         </div>
       </section>
 
@@ -200,7 +201,7 @@
 
         <div class="row">
           <label for="confidence" class="with-help">Uncertainty<span
-            class="help" tabindex="0" data-tip="">?</span></label>
+            class="help" id="help-confidence" tabindex="0" data-tip="">?</span></label>
           <select id="confidence">
             <option value="1">1&sigma; (68.3%, per component)</option>
             <option value="1.960" selected>95% (k = 1.960, per component)</option>

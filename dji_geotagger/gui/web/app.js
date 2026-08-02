@@ -2050,17 +2050,37 @@ const DIMENSION_K = {
 };
 
 /* The icon lives inside its label, so without this a click on it is forwarded
-   to the control and opens the dropdown it is there to explain. */
-$('.help').addEventListener('click', (ev) => {
-  ev.preventDefault();
-  ev.stopPropagation();
-  ev.target.focus();
+   to the control and opens the dropdown it is there to explain. Bound to every
+   help icon, not the first one: a second `.help` under a querySelector would
+   silently leave the others dead. */
+document.querySelectorAll('.help').forEach((icon) => {
+  icon.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.target.focus();
+  });
 });
+
+/* Zero is the default, and deliberately so - see the tooltip. Written once
+   here rather than in the markup so the reasoning sits with the code that
+   decides it. */
+$('#help-antenna').dataset.tip =
+  'Vertical distance from the ground mark to the antenna reference point.\n' +
+  '\n' +
+  'It is subtracted by CSRS-PPP and added back for the PPK solve, so the\n' +
+  'two cancel and camera positions are unaffected either way.\n' +
+  '\n' +
+  'Leave it at 0 and the solved base coordinate describes the antenna\n' +
+  'itself - fewer steps to get wrong, but that point cannot be used as a\n' +
+  'control point without adding the height back by hand.\n' +
+  '\n' +
+  'Enter the measured height and the coordinate describes the ground mark,\n' +
+  'which is what a control point has to be.';
 
 function updateConfidenceHelp() {
   const rows = DIMENSION_K[$('#confidence').value];
   if (!rows) return;
-  $('.help').dataset.tip =
+  $('#help-confidence').dataset.tip =
     'Reported figure covers ' + rows[0] + '.\n' +
     'Not a horizontal radius: ' + rows[1] + '.\n' +
     'For a full 3-D statement, ' + rows[2] + '.';
