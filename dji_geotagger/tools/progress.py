@@ -35,6 +35,7 @@ awaited.
 from __future__ import annotations
 
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 
@@ -58,12 +59,18 @@ class ProgressEvent:
         Units completed, when countable.
     total : int | None
         Units expected, when known.
+    key : str | None
+        Which concurrent unit of work this refers to, when several run at
+        once - a flight name while a pool of solvers is going. Without it a
+        display has no way to tell four interleaved streams apart, and their
+        percentages appear to jump backwards. None for sequential work.
     """
 
     stage: str
     message: str = ""
     current: int | None = None
     total: int | None = None
+    key: str | None = None
 
     @property
     def fraction(self) -> float | None:
@@ -87,18 +94,33 @@ class Progress:
         Called at each checkpoint. Return True to stop the run.
     """
 
-    def __init__(self, on_progress=None, should_cancel=None):
+    def __init__(self, on_progress=None, should_cancel=None, key=None):
         self._on_progress = on_progress
         self._should_cancel = should_cancel
+        self._key = key
+
+    def tagged(self, key: str) -> "Progress":
+        """
+        A view of this Progress whose reports are labelled `key`.
+
+        Handed to each worker when flights are solved concurrently, so their
+        interleaved reports stay distinguishable. Cancellation is shared -
+        it is the same flag, so stopping stops everything.
+        """
+        return Progress(on_progress=self._on_progress,
+                        should_cancel=self._should_cancel,
+                        key=key)
 
     def update(self, stage: str, message: str = "",
-               current: int = None, total: int = None) -> None:
+               current: int = None, total: int = None,
+               key: str = None) -> None:
         """Report progress and check for cancellation."""
         if self._on_progress is not None:
             try:
                 self._on_progress(
                     ProgressEvent(stage=stage, message=message,
-                                  current=current, total=total))
+                                  current=current, total=total,
+                                  key=key if key is not None else self._key))
             except Exception:  # noqa: BLE001 - display failure is not fatal
                 pass
         self.check()
@@ -151,7 +173,7 @@ class Progress:
         self.check()
 
     def run_subprocess(self, cmd: list[str], tick: float = 0.5,
-                       **kwargs) -> int:
+                       on_line=None, **kwargs) -> int:
         """
         Run an external command under supervision, so it can be cancelled.
 
@@ -165,6 +187,13 @@ class Progress:
             Command and arguments.
         tick : float, default 0.5
             How often to check for cancellation.
+        on_line : callable, optional
+            Called with each line the child writes to stderr, stripped. Used
+            to turn a tool's own chatter into progress - ``rnx2rtkp`` reports
+            the epoch it is working on there. The reader runs on its own
+            thread because the child fills the pipe faster than the poll loop
+            wakes, and a full pipe would deadlock the child. Exceptions raised
+            here are suppressed: a faulty display must not kill a solve.
         **kwargs
             Passed to :class:`subprocess.Popen`.
 
@@ -179,11 +208,35 @@ class Progress:
             If cancelled; the child is terminated first, escalating to kill
             if it does not exit promptly.
         """
-        if not self.is_active:
+        if not self.is_active and on_line is None:
             # Nothing to cancel and nothing to report: keep the simple path.
             return subprocess.run(cmd, **kwargs).returncode
 
+        if on_line is not None:
+            # RTKLIB separates its progress lines with carriage returns, which
+            # text mode treats as line endings, so iteration yields one epoch
+            # report at a time.
+            kwargs.setdefault("stderr", subprocess.PIPE)
+            kwargs.setdefault("text", True)
+            kwargs.setdefault("bufsize", 1)
+
         proc = subprocess.Popen(cmd, **kwargs)
+
+        reader = None
+        if on_line is not None and proc.stderr is not None:
+            def pump():
+                try:
+                    for line in proc.stderr:
+                        try:
+                            on_line(line.strip())
+                        except Exception:  # noqa: BLE001
+                            pass
+                except (ValueError, OSError):
+                    pass  # pipe closed under us during termination
+
+            reader = threading.Thread(target=pump, daemon=True)
+            reader.start()
+
         try:
             while True:
                 try:
@@ -199,6 +252,8 @@ class Progress:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
+            if reader is not None:
+                reader.join(timeout=2)
         raise OperationCancelled("[INFO] Cancelled by user.")
 
 

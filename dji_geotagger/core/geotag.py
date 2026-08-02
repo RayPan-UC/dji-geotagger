@@ -1,7 +1,10 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import threading
+
 import pandas as pd
 from dji_geotagger.ppk.raw_converter import raw2rinex
-from dji_geotagger.ppk.ppk_solver import process_ppk
+from dji_geotagger.ppk.ppk_solver import process_ppk, prepare_ppk_inputs
 from dji_geotagger.core.mrk_parser import mrk2df
 from dji_geotagger.core.xml_parser import parse_img_dir
 from dji_geotagger.core.camera_pos_solver import compute_camera_position
@@ -20,7 +23,8 @@ def geotag(
     full_output: bool = False,
     base_position: dict = None,
     progress=None,
-    on_flight_error: str = "skip"
+    on_flight_error: str = "skip",
+    max_workers: int = 1
 ) -> pd.DataFrame:
     """
     High-level API: run an end-to-end DJI geotagging pipeline for one or more flight folders.
@@ -86,6 +90,18 @@ def geotag(
         steps too - the RTKLIB solve and the CSRS-PPP poll are supervised
         rather than simply awaited.
 
+    max_workers : int, default 1
+        How many flights to solve at once. Threads are enough - the CPU time
+        goes to the `rnx2rtkp` child process, so the GIL is not involved.
+
+        Defaults to 1 so that existing scripts keep their exact ordering and
+        log. Beyond about four the bottleneck moves from CPU to disk anyway,
+        since every worker reads the same base observation file, and leaving a
+        core free keeps the machine usable: `min(4, os.cpu_count() - 1)` is a
+        reasonable choice for a caller that wants one.
+
+        Progress reports from concurrent flights carry `ProgressEvent.key`, so
+        a display can keep them apart.
     on_flight_error : {"skip", "raise"}, default "skip"
         What to do when one flight fails.
 
@@ -146,71 +162,117 @@ def geotag(
             f"[ERROR] on_flight_error must be 'skip' or 'raise', "
             f"got {on_flight_error!r}")
 
+    # The RTKLIB config and the precise ephemerides depend on the base station
+    # only, so they are built once here rather than rederived identically for
+    # every flight. Same argument as the base position above, and it is what
+    # allows flights to be solved concurrently later: the default config path
+    # is fixed, so per-flight generation would have workers overwriting a file
+    # another one was reading.
+    progress.update("start", "Preparing RTKLIB configuration and ephemerides")
+    conf_file, ephemeris_files = prepare_ppk_inputs(
+        base_obs,
+        sum_file_path=sum_file_path,
+        base_position=base_position,
+    )
+
     results = []
     failures = []
     n_flights = len(flight_folders)
+    done = 0
+    lock = threading.Lock()
 
-    for flight_index, flight_dir in enumerate(flight_folders, start=1):
+    def solve(flight_dir: Path):
+        """One flight, start to finished camera table."""
+        # Each worker reports under its own key so that concurrent streams stay
+        # distinguishable; sequentially it is the same behaviour with a label.
+        flight_progress = progress.tagged(flight_dir.name)
 
-        flight_dir = Path(flight_dir)
-        # Flight count is the unit a user actually thinks in, so it drives the
-        # overall figure; the per-step detail rides along in the message.
-        progress.update("flight", f"Flight {flight_index}/{n_flights}: "
-                                  f"{flight_dir.name}",
-                        current=flight_index - 1, total=n_flights)
+        rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
+        if not rover_raws:
+            raise FileNotFoundError(f"No *_PPKRAW.bin found in {flight_dir}")
+        rover_obs, _ = raw2rinex(rover_raws[0], progress=flight_progress)
 
-        try:
-            # Step 1+2: Rover RINEX + PPK
-            rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
-            if not rover_raws:
-                raise FileNotFoundError(
-                    f"No *_PPKRAW.bin found in {flight_dir}")
-            rover_raw = rover_raws[0]
-            rover_obs, _ = raw2rinex(rover_raw, progress=progress)
-            pos_df = process_ppk(
-                            base_obs,
-                            base_nav,
-                            rover_obs=rover_obs,
-                            sum_file_path=sum_file_path,
-                            base_position=base_position,
-                            progress=progress)
+        pos_df = process_ppk(
+            base_obs, base_nav,
+            rover_obs=rover_obs,
+            sum_file_path=sum_file_path,
+            base_position=base_position,
+            conf_file=conf_file,
+            ephemeris_files=ephemeris_files,
+            progress=flight_progress,
+        )
 
-            # Step 3: MRK
-            mrks = list(flight_dir.glob("*.MRK"))
-            if not mrks:
-                raise FileNotFoundError(f"No *.MRK found in {flight_dir}")
-            mrk = mrks[0]
-            mrk_df = mrk2df(mrk)
+        mrks = list(flight_dir.glob("*.MRK"))
+        if not mrks:
+            raise FileNotFoundError(f"No *.MRK found in {flight_dir}")
 
-            # Step 4: Image XML
-            img_df = parse_img_dir(flight_dir, progress=progress)
-
-            # Step 5: Camera position
-            result = compute_camera_position(
-                pos_df=pos_df,
-                mrk_df=mrk_df,
-                img_df=img_df,
-                full_output=full_output,
-            )
-        except OperationCancelled:
-            # A cancel is the user's decision about the whole run, not a
-            # property of this flight. Never swallowed.
-            raise
-        except Exception as exc:
-            if on_flight_error == "raise":
-                raise
-            logger.error(f"Flight {flight_dir.name} failed and was skipped: "
-                         f"{type(exc).__name__}: {exc}")
-            failures.append((flight_dir.stem, f"{type(exc).__name__}: {exc}"))
-            progress.update("flight", f"Skipped {flight_dir.name}",
-                            current=flight_index, total=n_flights)
-            continue
-
-        # flight name
+        result = compute_camera_position(
+            pos_df=pos_df,
+            mrk_df=mrk2df(mrks[0]),
+            img_df=parse_img_dir(flight_dir, progress=flight_progress),
+            full_output=full_output,
+        )
         result["flight"] = flight_dir.stem
-        results.append(result)
-        progress.update("flight", f"Finished {flight_dir.name}",
-                        current=flight_index, total=n_flights)
+        return result
+
+    def finish(flight_dir: Path, result, exc):
+        """Record one outcome. Called from worker threads, hence the lock."""
+        nonlocal done
+        with lock:
+            done += 1
+            if exc is None:
+                results.append(result)
+                message = f"Finished {flight_dir.name}"
+            else:
+                logger.error(f"Flight {flight_dir.name} failed and was "
+                             f"skipped: {type(exc).__name__}: {exc}")
+                failures.append((flight_dir.stem,
+                                 f"{type(exc).__name__}: {exc}"))
+                message = f"Skipped {flight_dir.name}"
+            progress.update("flight", message, current=done, total=n_flights)
+
+    folders = [Path(f) for f in flight_folders]
+    progress.update("flight", f"{n_flights} flight(s) to process",
+                    current=0, total=n_flights)
+
+    if max_workers <= 1:
+        for flight_dir in folders:
+            try:
+                finish(flight_dir, solve(flight_dir), None)
+            except OperationCancelled:
+                # A cancel is the user's decision about the whole run, not a
+                # property of this flight. Never swallowed.
+                raise
+            except Exception as exc:
+                if on_flight_error == "raise":
+                    raise
+                finish(flight_dir, None, exc)
+    else:
+        # Threads, not processes: the CPU time is spent inside the rnx2rtkp
+        # child, so the GIL is not on the path, and a thread pool keeps the
+        # progress callbacks and the cancel flag shared without any IPC.
+        logger.info(f"Solving {n_flights} flights with {max_workers} workers.")
+        cancelled = None
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(solve, f): f for f in folders}
+            for future in as_completed(futures):
+                flight_dir = futures[future]
+                try:
+                    finish(flight_dir, future.result(), None)
+                except OperationCancelled as exc:
+                    cancelled = exc
+                    # Stop handing out work; those already running will hit
+                    # their own next checkpoint and raise too.
+                    for pending in futures:
+                        pending.cancel()
+                except Exception as exc:
+                    if on_flight_error == "raise":
+                        for pending in futures:
+                            pending.cancel()
+                        raise
+                    finish(flight_dir, None, exc)
+        if cancelled is not None:
+            raise cancelled
 
     if failures:
         logger.warning(

@@ -1,5 +1,8 @@
 from pathlib import Path
+from datetime import datetime, timezone
+import re
 import subprocess
+import time
 import pandas as pd
 from dji_geotagger.tools.install_RTKLIB import get_rtklib_executable
 from dji_geotagger.ppk.ephemeris_downloader import download_igs_data
@@ -8,9 +11,155 @@ from dji_geotagger.config.import_config import override_rtklib_config
 from dji_geotagger.core.pos_parser import pos2df
 from dji_geotagger.tools.logging_setup import get_logger
 from dji_geotagger.tools.progress import as_progress
+from dji_geotagger.ppk.time_check import parse_obs_time_range
+
+
+# rnx2rtkp reports the epoch it is working on, once per epoch, on stderr:
+#
+#     processing : 2025/07/22 18:41:14 Q=2
+#
+_RTK_EPOCH = re.compile(
+    r"processing\s*:\s*(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})"
+    r"(?:\.\d+)?\s+Q=(\d+)")
+
+# One line per epoch and no throttling of its own: a sixteen-minute flight
+# emits over nine thousand of them. Reporting each one upward would swamp any
+# display for no gain, so updates are rate limited here instead.
+_RTK_REPORT_INTERVAL_S = 0.3
+
+
+class _RtkProgressReader:
+    """
+    Turn rnx2rtkp's per-epoch chatter into a completion fraction.
+
+    The solve is a combined forward/backward filter, which was measured to
+    split almost exactly in half: 4674 forward epochs then 4673 backward over
+    the same span. So the forward pass drives 0-50% and the backward pass
+    50-100%, with the reversal detected from the timestamps themselves rather
+    than assumed from the configuration.
+
+    Two details come from that measurement:
+
+    * The first and last lines of a pass carry timestamps outside the rover's
+      own window (17:37 and 23:01 for a flight spanning 18:41 to 18:56), so
+      the fraction is clamped rather than trusted.
+    * ``Q`` is on the same line, which means the fixed rate is known while the
+      solve is still running. A stretch of float is worth seeing at the time,
+      not after.
+    """
+
+    def __init__(self, progress, rover_obs: Path):
+        self._progress = progress
+        self._name = rover_obs.name
+        self._backward = False
+        self._previous = None
+        self._last_report = 0.0
+        self._counts = {}
+
+        try:
+            self._start, self._end = parse_obs_time_range(rover_obs)
+            self._span = (self._end - self._start).total_seconds()
+        except Exception:  # noqa: BLE001 - progress must not break a solve
+            self._start = self._end = None
+            self._span = 0.0
+
+    def __call__(self, line: str) -> None:
+        if not line:
+            return
+
+        match = _RTK_EPOCH.search(line)
+        if match is None:
+            # rnx2rtkp puts real failures on the same stream.
+            if line.lower().startswith("error"):
+                logger.warning(f"[WARN] rnx2rtkp: {line}")
+            return
+
+        epoch = datetime.strptime(match.group(1), "%Y/%m/%d %H:%M:%S").replace(
+            tzinfo=timezone.utc)
+        quality = int(match.group(2))
+        self._counts[quality] = self._counts.get(quality, 0) + 1
+
+        # Direction from the raw timestamps, before clamping flattens the
+        # very reversal that has to be detected.
+        if (not self._backward and self._previous is not None
+                and (epoch - self._previous).total_seconds() < -5):
+            self._backward = True
+        self._previous = epoch
+
+        now = time.monotonic()
+        if now - self._last_report < _RTK_REPORT_INTERVAL_S:
+            return
+        self._last_report = now
+
+        if self._span > 0:
+            elapsed = (epoch - self._start).total_seconds()
+            within = min(1.0, max(0.0, elapsed / self._span))
+            fraction = (0.5 + 0.5 * (1.0 - within) if self._backward
+                        else 0.5 * within)
+        else:
+            fraction = 0.5 if self._backward else 0.0
+
+        total = sum(self._counts.values())
+        fixed = self._counts.get(1, 0)
+        pass_name = "backward" if self._backward else "forward"
+        message = (f"{self._name} - {pass_name}, "
+                   f"{100.0 * fixed / total:.0f}% fixed")
+
+        self._progress.update("ppk", message,
+                              current=int(fraction * 1000), total=1000)
 from dji_geotagger.ppk.time_check import check_time_overlap
 
 logger = get_logger(__name__)
+
+
+def prepare_ppk_inputs(
+    base_obs: str | Path,
+    sum_file_path: str | Path = None,
+    user_conf: dict = None,
+    base_position: dict = None,
+    ephemeris_files: list[str | Path] = None,
+) -> tuple[Path, list[Path]]:
+    """
+    Build the parts of a PPK solve that every rover in a batch shares.
+
+    The RTKLIB configuration and the precise ephemerides are derived from the
+    base station alone, so for a survey of nineteen flights they are nineteen
+    times the same answer. Hoisting them out of the loop removes that, and
+    removes the two obstacles to solving flights concurrently:
+
+    * `override_rtklib_config` writes to a fixed path by default, so parallel
+      solves would overwrite the file while another process was reading it;
+    * `download_igs_data` would have several workers fetching the same product
+      to the same destination at once.
+
+    Parameters
+    ----------
+    base_obs : str | Path
+        Base station RINEX observation file.
+    sum_file_path : str | Path, optional
+        CSRS-PPP summary, used to place the base station.
+    user_conf : dict, optional
+        RTKLIB overrides, merged over the defaults.
+    base_position : dict, optional
+        An already-resolved base position, preferred over re-reading the .sum.
+    ephemeris_files : list, optional
+        Skip the download and use these.
+
+    Returns
+    -------
+    (Path, list[Path])
+        The configuration file, and the ephemeris products.
+    """
+    user_conf = dict(user_conf or {})
+    base_conf = base_pos_to_rtklib_conf(base_obs, sum_file_path, user_conf,
+                                        base_position=base_position)
+    user_conf.update(base_conf)
+    conf_file = override_rtklib_config(user_conf)
+
+    if not ephemeris_files:
+        ephemeris_files = download_igs_data(base_obs_path=base_obs)
+
+    return conf_file, ephemeris_files
 
 
 def process_ppk(
@@ -27,7 +176,8 @@ def process_ppk(
     base_position: dict = None,
     auto_install: bool = None,
     progress=None,
-    check_overlap: bool = True
+    check_overlap: bool = True,
+    conf_file: Path = None
     ) -> pd.DataFrame:
     """
     Run a single RTKLIB PPK solution (rnx2rtkp) for one rover observation file and
@@ -97,6 +247,12 @@ def process_ppk(
         the console but only when running interactively. Non-interactive
         callers such as a GUI get an error instead of a hung prompt; see
         :func:`~dji_geotagger.tools.install_RTKLIB.get_rtklib_executable`.
+    conf_file : Path, optional
+        A ready-made RTKLIB configuration, as returned by
+        `prepare_ppk_inputs`. Supplying it skips regenerating an identical
+        file for every rover in a batch - and, because the default config
+        path is fixed, is what makes it safe to solve several flights at
+        once. Built from `user_conf` and the base position when omitted.
     check_overlap : bool, default True
         Verify that the base station observed while the rover was flying,
         before invoking RTKLIB. Raises when they do not overlap. Set False
@@ -151,18 +307,18 @@ def process_ppk(
     # Check rnx2rtkp
     rnx2rtkp = get_rtklib_executable("rnx2rtkp", RTKLIB, auto_install)
 
-    # Handle base station configuration. Resolved once here and reused for both
-    # the RTKLIB config and the covariance propagation in pos2df, so the .sum
-    # is not parsed twice per rover file.
-    base_conf = base_pos_to_rtklib_conf(base_obs, sum_file_path, user_conf,
-                                        base_position=base_position)
-    user_conf.update(base_conf)
-    conf_file = override_rtklib_config(user_conf)
+    # The config and the ephemerides depend only on the base station, never on
+    # which rover is being solved. A caller working through a batch should
+    # prepare them once with `prepare_ppk_inputs` and pass them in; doing it
+    # per rover re-derives an identical file and re-parses the same .sum for
+    # every flight.
+    if conf_file is None:
+        conf_file, ephemeris_files = prepare_ppk_inputs(
+            base_obs, sum_file_path=sum_file_path, user_conf=user_conf,
+            base_position=base_position, ephemeris_files=ephemeris_files)
+    elif not ephemeris_files:
+        ephemeris_files = download_igs_data(base_obs_path=base_obs)
 
-    # Download ephemeris data (.clk and .sp3)
-    if not ephemeris_files:
-        ephemeris_files = download_igs_data(base_obs_path=base_obs)   
-    
     # start ppk
     output_pos = output_dir / f"{rover_obs.stem}.pos"
 
@@ -186,7 +342,8 @@ def process_ppk(
 
         logger.info(f"Solving: {rover_obs.name} ...")
         progress.update("ppk", f"Solving {rover_obs.name}")
-        returncode = progress.run_subprocess(cmd)
+        returncode = progress.run_subprocess(
+            cmd, on_line=_RtkProgressReader(progress, rover_obs))
         if returncode != 0:
             raise RuntimeError(
                 f"[ERROR] Failed to process: {rover_obs.name} "
