@@ -12,12 +12,14 @@ This Python library enables centimetre-level camera geotagging by combining PPK 
 - Resolve the base station position from CSRS-PPP (submitted automatically or from a `.sum`) or known coordinates
 - Apply the DJI `.MRK` lever arm to the camera centre, propagating full 3×3 covariance
 - Transform to any CRS, with guards against PROJ's silent failure modes
-- Batch multiple flight folders with per-flight error isolation
+- Batch multiple flight folders with per-flight error isolation, optionally in parallel
+- Desktop front end with a map, quality colouring and a validating CRS picker
 
 ## Installation
 
 ```bash
-pip install dji-geotagger
+pip install dji-geotagger          # library
+pip install dji-geotagger[gui]     # library and desktop front end
 ```
 
 Or from source:
@@ -33,6 +35,34 @@ Python ≥ 3.11, plus `pillow`, `defusedxml`, `pandas`, `numpy`, `pyproj`, `tqdm
 `requests`, `georinex`, `astropy`, `pymap3d`.
 
 RTKLIB (`convbin`, `rnx2rtkp`) is downloaded automatically on first use.
+
+The front end adds `pywebview`, which is why it is an extra rather than a
+dependency: a headless script should not install a GUI toolkit it will never
+open.
+
+## Desktop Front End
+
+```bash
+python -c "from dji_geotagger.gui import launch; launch()"
+```
+
+Four steps, each unlocked by the one before it: base station, base position,
+flights, output.
+
+Resolving the base is a separate action from the run. CSRS-PPP takes minutes
+and every flight inherits whatever it returns, so the coordinates are shown
+and wait to be looked at first. An existing result is reused when its frame,
+mode and epoch match the request.
+
+The map is the check that costs nothing. MRK positions appear as soon as a
+folder is added — wrong folder, missing flight or GNSS gap all show up before
+anything is processed. Afterwards it shows the corrected camera centres,
+coloured by their own horizontal uncertainty and clickable down to a preview
+of the photo.
+
+The coordinate system picker validates a target by running the real
+transformation against the resolved base, so it refuses exactly what a run
+would refuse — and it does so before the run rather than ten minutes into it.
 
 ## Quick Start
 
@@ -71,6 +101,12 @@ geotag_df.to_csv("geotagged_results.csv", index=False)
 
 All three modes return the same structure, so the rest of the script is
 unchanged whichever is used.
+
+`antenna_height_in_meter` decides what the solved coordinate refers to. Given
+one, it is the ground mark; left at zero, it is the antenna reference point.
+Both ends are handled — the RINEX header and RTKLIB's own antenna delta — so
+the two never disagree. (Before 2.1.1 the value was silently discarded and the
+result always referred to the ARP.)
 
 ```python
 # Submit to CSRS-PPP and fetch the .sum back (no account needed)
@@ -267,8 +303,12 @@ EXIF/XMP timestamps are UTC, and that MRK files cover the same period.
 
 ## Performance Tips
 
+- Process multiple flights in one `geotag()` call: the RTKLIB configuration
+  and the ephemerides are then prepared once instead of once per flight
+- Solve them concurrently with `geotag(..., max_workers=4)`. Measured 2.35×
+  on three flights, with byte-identical output. Past about four the limit is
+  the disk, since every worker reads the same base observation file
 - Use IGS Rapid orbits (available ~17–18 hours after end-of-day UTC)
-- Process multiple flights in one `geotag()` call
 - Filter low-confidence solutions using covariance thresholds
 
 ## References
