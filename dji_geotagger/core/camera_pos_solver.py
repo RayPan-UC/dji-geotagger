@@ -10,7 +10,8 @@ def compute_camera_position(
     mrk_df: pd.DataFrame,
     img_df: pd.DataFrame,
     pos_df: pd.DataFrame,
-    full_output: bool = False    
+    full_output: bool = False,
+    max_gap_s: float | None = None,
 ) -> pd.DataFrame:
     """
     Compute corrected camera center positions for each exposure epoch.
@@ -55,7 +56,8 @@ def compute_camera_position(
     exposure_df = match_mrk_xml(mrk_df, img_df)
 
     # Step 2
-    exposure_df = interpolate_pos_at_exposure(pos_df, exposure_df)
+    exposure_df = interpolate_pos_at_exposure(pos_df, exposure_df,
+                                              max_gap_s=max_gap_s)
 
     # Step 3
     exposure_df = apply_gimbal_correction(exposure_df)
@@ -112,6 +114,7 @@ def match_mrk_xml(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
 def interpolate_pos_at_exposure(
     pos_df: pd.DataFrame,
     exposure_df: pd.DataFrame,
+    max_gap_s: float | None = None,
 ) -> pd.DataFrame:
     """
     Interpolate rover PPK antenna ECEF positions to exposure epochs.
@@ -158,6 +161,25 @@ def interpolate_pos_at_exposure(
 
     # Coverage mask
     outside_mask = (exp_t < pos_t.min()) | (exp_t > pos_t.max())
+
+    # A trajectory assembled from several flights is continuous in index but
+    # not in time: between two folders of the same flight the join is a
+    # fraction of a second, but between two missions it can be an hour. Being
+    # inside the overall span is therefore no longer sufficient - without this,
+    # an exposure sitting in a real gap would be interpolated straight across
+    # it and come back as a confident position that was never observed.
+    if max_gap_s is not None and len(pos_t) > 1:
+        right = np.searchsorted(pos_t, exp_t, side="left")
+        left = np.clip(right - 1, 0, len(pos_t) - 1)
+        right = np.clip(right, 0, len(pos_t) - 1)
+        spanned = pos_t[right] - pos_t[left]
+        in_a_gap = (spanned > max_gap_s) & ~outside_mask
+        if in_a_gap.any():
+            logger.warning(
+                f"{int(in_a_gap.sum())} exposure(s) fall in a trajectory gap "
+                f"longer than {max_gap_s:g} s and were not interpolated.")
+            outside_mask = outside_mask | in_a_gap
+
     inside_mask = ~outside_mask
 
     # Initialize cov/sigma columns as NaN (object dtype safe for arrays)
