@@ -255,6 +255,112 @@ def _scale_sigma(df, k: float, label: str):
     return df.rename(columns={c: f"{c}_{suffix}" for c in columns})
 
 
+# Two observation files belong to one continuous recording if the second
+# starts within this of the first ending. The rover logs at 5 Hz, so a file
+# rollover shows up as a single missing epoch - 0.2 s. A second is generous
+# enough to absorb a slower rate and far short of a real break, which is
+# minutes.
+_ROVER_JOIN_TOLERANCE_S = 1.0
+
+
+def _merged_rover_spans(paths: list[str]) -> list[tuple[float, float]]:
+    """
+    One set of continuous intervals for the whole selection.
+
+    The aircraft records without interruption, but DJI writes the stream to a
+    new file whenever the photo folder rolls, and closes the old one a few
+    seconds before the last exposures are written into that folder. Treated
+    folder by folder, those exposures look uncovered; treated as the single
+    recording they are, they are not.
+
+    Files that abut are merged; genuinely separate sorties stay separate, so
+    an exposure between two of them is still reported.
+    """
+    logger = logging.getLogger("dji_geotagger")
+    spans = []
+    for path in paths:
+        obs = next(iter(Path(path).glob("*_PPKOBS.obs")), None)
+        if obs is None:
+            continue
+        try:
+            first, last = parse_obs_time_range(obs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read %s: %s", obs.name, exc)
+            continue
+        spans.append((_gps_seconds(first), _gps_seconds(last)))
+
+    if not spans:
+        return []
+
+    spans.sort()
+    merged = [list(spans[0])]
+    for start, end in spans[1:]:
+        if start - merged[-1][1] <= _ROVER_JOIN_TOLERANCE_S:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    if len(merged) < len(spans):
+        logger.info("[INFO] %d rover observation file(s) join into %d "
+                    "continuous span(s).", len(spans), len(merged))
+    return [(a, b) for a, b in merged]
+
+
+def _lending_folders(selected: list[str], discovered: list[str]) -> list[str]:
+    """
+    Unselected folders whose observations a selected flight needs.
+
+    A folder's last exposures are routinely recorded in the next folder's
+    observation file. When the next folder is not part of the run, those
+    exposures have nothing to land on - so it is solved anyway, for its
+    observations alone.
+
+    Only folders that actually help are returned: one whose span does not
+    abut a selected one is left out, because it would cost a solve and lend
+    nothing.
+    """
+    chosen = {str(Path(p)) for p in selected}
+    others = [p for p in discovered if str(Path(p)) not in chosen]
+    if not others:
+        return []
+
+    covered = _merged_rover_spans(selected)
+    if not covered:
+        return []
+
+    lending = []
+    for path in others:
+        obs = next(iter(Path(path).glob("*_PPKOBS.obs")), None)
+        if obs is None:
+            continue
+        try:
+            first, last = parse_obs_time_range(obs)
+        except Exception:  # noqa: BLE001
+            continue
+        start, end = _gps_seconds(first), _gps_seconds(last)
+        # Abuts a selected span at either end, so joining it extends the
+        # trajectory rather than adding an island somewhere else in the day.
+        if any(abs(start - b) <= _ROVER_JOIN_TOLERANCE_S
+               or abs(a - end) <= _ROVER_JOIN_TOLERANCE_S
+               for a, b in covered):
+            lending.append(path)
+    return lending
+
+
+def _outside_spans(stamps, spans: list[tuple[float, float]]):
+    """
+    Boolean mask over `stamps`: True where it falls in none of the intervals.
+
+    `stamps` is a pandas Series, so the masks combine without numpy - this
+    module has no other use for it.
+    """
+    inside = None
+    for start, end in spans:
+        covered = (stamps >= start) & (stamps <= end)
+        inside = covered if inside is None else (inside | covered)
+    return ~inside
+
+
 # How far into a raw log to look for the station position. The DRTK-3 sends
 # RTCM 1006 about once a second, and the first frame lands within the first
 # few kilobytes; this is slack, not a requirement.
@@ -1187,7 +1293,8 @@ class Api:
             })
         return tracks
 
-    def check_coverage(self, paths: list[str]) -> dict:
+    def check_coverage(self, paths: list[str],
+                       selected: list[str] | None = None) -> dict:
         """
         Report which exposures fall outside the base station's observations.
 
@@ -1222,6 +1329,15 @@ class Api:
 
         window = [_gps_seconds(start), _gps_seconds(end)]
 
+        # Two sets of spans. What the run will actually have available comes
+        # from the ticked folders alone, because those are what geotag() is
+        # given. What exists on disk includes the rest, and the difference is
+        # worth naming: an exposure recorded in a folder the user has not
+        # ticked is recoverable by ticking it, which is a different problem
+        # from one that was never observed.
+        rover_spans = _merged_rover_spans(selected if selected else paths)
+        all_spans = _merged_rover_spans(paths) if selected else rover_spans
+
         flights = []
         for path in paths:
             folder = Path(path)
@@ -1243,20 +1359,23 @@ class Api:
             # The aircraft's own observations, straight from the flight folder
             # - no processing needed, so this is knowable now rather than
             # after RTKLIB has run.
-            rover = next(iter(folder.glob("*_PPKOBS.obs")), None)
-            outside_rover = outside_base & False
-            rover_window = None
-            if rover is not None:
-                try:
-                    r0, r1 = parse_obs_time_range(rover)
-                    rover_window = [_gps_seconds(r0), _gps_seconds(r1)]
-                    outside_rover = ((stamps < rover_window[0])
-                                     | (stamps > rover_window[1]))
-                except Exception as exc:  # noqa: BLE001
-                    logging.getLogger("dji_geotagger").warning(
-                        "Could not read %s: %s", rover.name, exc)
+            # Against the merged spans, not this folder's own file. The
+            # aircraft logs continuously and DJI closes the observation file a
+            # few seconds before it rolls the photo folder, so a folder's last
+            # exposures are routinely recorded in the next folder's file. Asked
+            # per folder, the question answers "outside" for data that is
+            # simply next door.
+            outside_rover = _outside_spans(stamps, rover_spans) \
+                if rover_spans else (outside_base & False)
 
             outside = outside_base | outside_rover
+
+            # Of those, the ones another folder on disk does observe.
+            recoverable = 0
+            if all_spans is not rover_spans and outside_rover.any():
+                recoverable = int(
+                    (outside_rover & ~_outside_spans(stamps, all_spans)
+                     & ~outside_base).sum())
 
             # The MRK's own sequence numbers index the exposures; only trust
             # them against filenames when the counts agree exactly.
@@ -1273,7 +1392,8 @@ class Api:
                 "outside": int(outside.sum()),
                 "outside_base": int(outside_base.sum()),
                 "outside_rover": int(outside_rover.sum()),
-                "has_rover": rover_window is not None,
+                "recoverable": recoverable,
+                "has_rover": bool(rover_spans),
                 "names": names[:_MAX_LISTED_NAMES] if names else None,
                 "truncated": bool(names and len(names) > _MAX_LISTED_NAMES),
             })
@@ -1547,6 +1667,8 @@ class Api:
                 base_position=self.base_position,
                 progress=progress,
                 max_workers=int(cfg.get("workers") or 1),
+                extra_obs_folders=_lending_folders(cfg["flights"],
+                                                   cfg.get("allFlights") or []),
             )
 
             # Kept before projection: changing the delivery CRS afterwards is

@@ -184,8 +184,21 @@
           <span class="list-tally" id="flight-tally"></span>
         </div>
 
+        <div class="list-cols hidden" id="flight-cols">
+          <span class="fbox"></span>
+          <span class="fname">Flight</span>
+          <span class="fcount">Photos</span>
+          <span class="fwarn">Uncovered</span>
+          <span class="fmrk">MRK</span>
+        </div>
+
         <div class="list" id="flight-list">
           <div class="list-empty">No survey folder chosen.</div>
+        </div>
+
+        <div class="list-foot">
+          <button class="list-edit hidden" data-action="edit-flights"
+                  id="btn-edit-flights">Review all&hellip;</button>
         </div>
       </section>
 
@@ -202,11 +215,13 @@
         <div class="row">
           <label for="confidence" class="with-help">Uncertainty<span
             class="help" id="help-confidence" tabindex="0" data-tip="">?</span></label>
-          <select id="confidence">
-            <option value="1">1&sigma; (68.3%, per component)</option>
-            <option value="1.960" selected>95% (k = 1.960, per component)</option>
-            <option value="2.576">99% (k = 2.576, per component)</option>
-          </select>
+          <!-- min is the step's base, so a non-zero one would make the
+               spinner land on 1.001, 1.101 and so on. Zero is rejected in
+               currentK() instead. -->
+          <input id="confidence" class="narrow" type="number"
+                 step="0.1" min="0" max="20" value="1.000">
+          <span class="unit">k</span>
+          <span class="hint" id="confidence-hint"></span>
         </div>
 
         <div class="row">

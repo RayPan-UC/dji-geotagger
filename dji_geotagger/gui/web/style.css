@@ -328,6 +328,26 @@ input.narrow-wide { flex: 0 0 150px; }
 
 .help:hover::after, .help:focus::after { opacity: 1; visibility: visible; }
 
+/* Numbers to be compared down a column, so they are tabular and right-aligned;
+   the row label is not. */
+.k-table {
+  width: 100%;
+  margin: 8px 0 10px;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.k-table td {
+  padding: 4px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.k-table td:first-child { text-align: left; color: var(--ink-soft); }
+.k-table tr:first-child td { color: var(--ink-faint); font-weight: 600; }
+.k-table tr:last-child td { border-bottom: none; }
+
 .hidden { display: none !important; }
 
 /* ---------------------------- segmented ------------------------------ */
@@ -530,6 +550,75 @@ input.narrow-wide { flex: 0 0 150px; }
 
 .list-tally { font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
+/* Opens the roomy view. The panel list stays a glance; anything that needs
+   reading across columns belongs where there is width for it. */
+.list-edit {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: 11px/1.5 "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.list-edit:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------------------------- flight review --------------------------- */
+
+/* Fixed layout, or the name column sizes to the longest DJI folder name and
+   pushes the table past the edge of the modal. */
+.fl-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+/* Widths are set inline on the col elements from app.js, so that the layout
+   does not depend on this rule reaching the table. */
+
+.fl-table th {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-weight: 600;
+  text-align: left;
+}
+
+/* Not `.num`: that is already the blue circle on the step headings, and a
+   table cell borrowing it came out as a badge with the number inside. */
+.fl-table th.fl-num, .fl-table td.fl-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+
+.fl-table tr:last-child td { border-bottom: none; }
+.fl-table tr.off td { color: var(--ink-faint); }
+.fl-table tr.dead td { background: #fdf6e3; }
+/* Right-to-left so a truncated path keeps its distinctive tail rather than
+   ellipsing away everything after the drive letter. */
+.fl-table td.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.fl-table .ok  { color: var(--ok); }
+.fl-table .bad { color: var(--bad); }
+.fl-table .warn { color: var(--warn); }
+
+.fl-bar { display: flex; gap: 8px; align-items: center; margin: 0 0 10px; }
+.fl-bar .spacer { flex: 1; }
+
 .list {
   border: 1px solid var(--line-soft);
   border-radius: 5px;
@@ -539,6 +628,7 @@ input.narrow-wide { flex: 0 0 150px; }
 }
 
 .list-empty { padding: 14px; text-align: center; color: var(--ink-faint); font-size: 12px; }
+
 
 .list-item {
   display: flex;
@@ -567,27 +657,63 @@ input.narrow-wide { flex: 0 0 150px; }
   text-align: left;
 }
 
-.list-item .fcount { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+/* Fixed widths so the header above the list lines up with every row. Without
+   them each row sized to its own text and no header could be drawn. */
+.list-item .fcount,
+.list-cols .fcount { flex: 0 0 74px; text-align: right; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.list-item .fwarn,
+.list-cols .fwarn  { flex: 0 0 78px; text-align: right; }
+.list-item .fmrk,
+.list-cols .fmrk   { flex: 0 0 38px; text-align: right; }
+
 .list-item .fmrk.ok  { color: var(--ok); }
 .list-item .fmrk.bad { color: var(--bad); }
 
+/* Column names, outside the scrolling box so they stay put. */
+.list-cols {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.list-cols .fname { flex: 1; min-width: 0; }
+/* Stands in for the tick box, which the header has no use for but must
+   still allow for. */
+.list-cols .fbox { flex: 0 0 13px; }
+
+.list-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
+
 /* Coverage warning. A button, not decoration - it opens the list of exposures
-   the base station was not observing. */
+   that cannot be solved.
+ *
+ * It carries the count, because a bare glyph says "something is wrong here"
+ * and nothing about scale: seven marginal exposures at a folder boundary and
+ * a flight that cannot be solved at all looked identical, and the first was
+ * being read as the second. */
 .fwarn {
   flex: 0 0 auto;
   border: none;
   background: none;
   padding: 0 2px;
-  font-size: 13px;
+  font-size: 11px;
   line-height: 1;
   color: var(--warn);
   cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.fwarn:hover { color: #7d4e00; }
+.fwarn:hover { color: #7d4e00; text-decoration: underline; }
+.fwarn.bad { color: var(--bad); }
+.fwarn.bad:hover { color: #7d1a15; }
 
-/* The whole row is tinted, so a flagged flight is findable by scrolling
-   rather than by reading every line for a small glyph. */
+/* Tinted only when the whole flight is lost. A partial shortfall leaves the
+   row plain: the count states the scale, and tinting 999 photos amber because
+   seven of them are marginal overstates it. */
 .list-item.warn        { background: #fdf6e3; }
 .list-item.warn:hover  { background: #f9eecd; }
 

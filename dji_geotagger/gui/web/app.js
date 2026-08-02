@@ -420,11 +420,10 @@ const actions = {
   },
 
   async 'reexport'() {
-    const confidence = $('#confidence');
     const started = await pywebview.api.reexport({
       targetCrs: state.crs,
-      k: parseFloat(confidence.value),
-      confidenceLabel: confidence.selectedOptions[0].textContent.split(' (')[0],
+      k: currentK(),
+      confidenceLabel: currentKLabel(),
       outFile: state.outFile,
     });
     if (!started) { log('Nothing to re-export.', 'WARN'); return; }
@@ -451,6 +450,10 @@ const actions = {
   'close-crs'() { $('#crs-modal').classList.add('hidden'); },
 
   'why-crs'() { explainCrs(); },
+
+  /* Unticks rather than removes: the rows stay visible with their warning
+     triangles, so the decision is auditable and reversible. */
+  'edit-flights'() { reviewFlights(); },
 
   async 'about'() { showAbout(); },
 
@@ -556,15 +559,18 @@ const actions = {
 
   async 'run'() {
     const flights = selectedFlights();
-    const confidence = $('#confidence');
 
     const started = await pywebview.api.run({
       flights: flights.map((f) => f.path),
+      /* Every folder found, so the run can borrow observations from an
+         unticked neighbour when a selected flight's last exposures were
+         recorded there. No rows come from them. */
+      allFlights: state.flights.map((f) => f.path),
       baseFile: state.baseFile,
       antennaHeight: parseFloat($('#antenna-height').value) || 0,
       targetCrs: state.crs,
-      k: parseFloat(confidence.value),
-      confidenceLabel: confidence.selectedOptions[0].textContent.split(' (')[0],
+      k: currentK(),
+      confidenceLabel: currentKLabel(),
       workers: parseInt($('#workers').value, 10) || 1,
       outFile: state.outFile,
     });
@@ -615,6 +621,7 @@ function renderFlights() {
   list.textContent = '';
 
   head.classList.toggle('hidden', state.flights.length === 0);
+  $('#flight-cols').classList.toggle('hidden', state.flights.length === 0);
 
   if (state.flights.length === 0) {
     /* Nothing chosen yet needs no announcement - the empty field above says
@@ -640,41 +647,68 @@ function renderFlights() {
   state.flights.forEach((flight, i) => {
     const coverage = state.coverage[flight.path];
     const flagged = coverage && coverage.outside > 0;
+    /* Everything, or nearly so: nothing usable will come out of this flight,
+       which is a different statement from "a few exposures at the edge". */
+    const lost = flagged && coverage.outside === coverage.exposures;
 
     const row = document.createElement('div');
     row.className = 'list-item' + (flight.on ? '' : ' off') +
-                    (flagged ? ' warn' : '');
+                    (lost || !flight.mrk ? ' warn' : '');
 
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = flight.on;
     box.style.accentColor = 'var(--accent)';
 
+    /* The folder's own name only. The path it sits under is the same for
+       every row and pushes the distinguishing tail out of view; the full path
+       is on the tooltip and in the review panel. */
     const name = document.createElement('span');
     name.className = 'fname';
-    name.textContent = prefixed ? leaf(flight.root) + '\\' + flight.name
-                                : flight.name;
+    name.textContent = leaf(flight.name);
     name.title = flight.path;
 
+    /* Bare values: the column headings already say what each one is, and
+       repeating "photos" and "MRK" on every row was most of the clutter. */
     const count = document.createElement('span');
     count.className = 'fcount';
-    count.textContent = flight.photos + ' photos';
+    count.textContent = flight.photos.toLocaleString();
+    count.title = flight.photos + ' photos';
 
     const mrk = document.createElement('span');
     mrk.className = 'fmrk ' + (flight.mrk ? 'ok' : 'bad');
-    mrk.textContent = flight.mrk ? 'MRK ✓' : 'MRK ✗';
-    if (!flight.mrk) mrk.title = 'No MRK file - timestamps cannot be matched.';
+    mrk.textContent = flight.mrk ? '✓' : '✗';
+    mrk.title = flight.mrk ? 'MRK file present'
+      : 'No MRK file - timestamps cannot be matched.';
 
     row.append(box, name, count);
 
     /* Directly after the count, because it is a statement about those
        photos - not a separate status alongside the MRK check. */
-    if (flagged) {
+    if (!flagged) {
+      /* An empty cell, so the columns line up under their header whether or
+         not a row has anything to report. */
+      const pad = document.createElement('span');
+      pad.className = 'fwarn';
+      row.appendChild(pad);
+    } else {
       const warn = document.createElement('button');
-      warn.className = 'fwarn';
-      warn.textContent = '▲';
-      warn.title = coverage.outside + ' of ' + coverage.exposures +
-                   ' exposures outside base coverage - click for details';
+      warn.className = 'fwarn' + (lost ? ' bad' : '');
+      warn.textContent = '▲ ' + coverage.outside;
+      if (lost) {
+        warn.title = 'No exposure in this flight is covered by both the base '
+          + 'and the aircraft observations - click for details.';
+      } else if (coverage.recoverable) {
+        warn.title = coverage.recoverable + ' of these ' + coverage.outside
+          + ' exposures were recorded in a flight folder that is not ticked. '
+          + 'Tick the rest of the survey and they come back - click for '
+          + 'details.';
+      } else {
+        warn.title = coverage.outside + ' of ' + coverage.exposures
+          + ' exposures are not covered by the observations and will come out '
+          + 'empty. The other ' + (coverage.exposures - coverage.outside)
+          + ' are unaffected - click for details.';
+      }
       warn.addEventListener('click', (ev) => {
         ev.stopPropagation();      /* not a row toggle */
         showCoverage(flight);
@@ -700,6 +734,132 @@ function renderFlights() {
 
 function selectedFlights() {
   return state.flights.filter((f) => f.on);
+}
+
+/* ---------------------------- flight review --------------------------- */
+
+/* The panel list has room for a name and two badges, which is enough to
+   glance at and not enough to decide with. This is the same information laid
+   out in columns, wide enough to compare down, and editable in place. */
+function reviewFlights() {
+  const nodes = [];
+
+  const bar = document.createElement('div');
+  bar.className = 'fl-bar';
+  const summary = document.createElement('span');
+  summary.style.cssText = 'font-size:12px;color:var(--ink-soft)';
+  bar.appendChild(summary);
+  bar.appendChild(Object.assign(document.createElement('span'),
+                                { className: 'spacer' }));
+
+  const table = document.createElement('table');
+  table.className = 'fl-table';
+
+  const button = (label, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'list-edit';
+    b.textContent = label;
+    b.style.marginLeft = '0';
+    b.addEventListener('click', () => { onClick(); draw(); flightsChanged(); });
+    return b;
+  };
+  bar.appendChild(button('All', () => state.flights.forEach((f) => { f.on = true; })));
+  bar.appendChild(button('None', () => state.flights.forEach((f) => { f.on = false; })));
+  bar.appendChild(button('Drop unusable',
+                         () => unusableFlights().forEach((f) => { f.on = false; })));
+
+  function draw() {
+    table.textContent = '';
+
+    /* Set on the col elements directly: a fixed-layout table needs the widths
+       before it lays out, and doing it here keeps the table correct even if
+       the stylesheet rule is missed. */
+    const group = document.createElement('colgroup');
+    ['30px', '', '70px', '48px', '92px'].forEach((width) => {
+      const col = document.createElement('col');
+      if (width) col.style.width = width;
+      group.appendChild(col);
+    });
+    table.appendChild(group);
+
+    const head = table.createTHead().insertRow();
+    ['', 'Flight', 'Photos', 'MRK', 'Uncovered'].forEach((label, i) => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      if (i >= 2) th.className = 'fl-num';
+      head.appendChild(th);
+    });
+
+    const body = table.createTBody();
+    state.flights.forEach((flight) => {
+      const coverage = state.coverage[flight.path];
+      const out = coverage ? coverage.outside : 0;
+      const dead = !flight.mrk
+        || (coverage && coverage.exposures > 0 && out === coverage.exposures);
+
+      const tr = body.insertRow();
+      tr.className = (flight.on ? '' : 'off ') + (dead ? 'dead' : '');
+
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = flight.on;
+      box.style.accentColor = 'var(--accent)';
+      box.addEventListener('change', () => {
+        flight.on = box.checked;
+        draw();
+        flightsChanged();
+      });
+      tr.insertCell().appendChild(box);
+
+      /* Full path here, where there is width for it - this is the view that
+         exists to be read carefully. */
+      const name = tr.insertCell();
+      name.className = 'name';
+      name.textContent = flight.path;
+      name.title = flight.path;
+
+      const photos = tr.insertCell();
+      photos.className = 'fl-num';
+      photos.textContent = flight.photos.toLocaleString();
+
+      const mrk = tr.insertCell();
+      mrk.className = 'fl-num ' + (flight.mrk ? 'ok' : 'bad');
+      mrk.textContent = flight.mrk ? '✓' : '✗';
+
+      const cov = tr.insertCell();
+      cov.className = 'fl-num' + (out ? (dead ? ' bad' : ' warn') : '');
+      if (!coverage) {
+        cov.textContent = '—';
+      } else if (!out) {
+        cov.textContent = '0';
+      } else if (coverage.recoverable) {
+        /* Not lost, merely not asked for. Said here rather than left to the
+           tooltip: this row is the one the user acts on. */
+        cov.textContent = out + ' — tick more';
+        cov.title = coverage.recoverable + ' of them were recorded in a '
+          + 'folder that is not ticked.';
+      } else {
+        cov.textContent = out + ' of ' + coverage.exposures;
+      }
+    });
+
+    const on = selectedFlights();
+    summary.textContent = on.length + ' of ' + state.flights.length +
+      ' selected  ·  ' +
+      on.reduce((s, f) => s + f.photos, 0).toLocaleString() + ' photos';
+  }
+
+  draw();
+  nodes.push(bar, table);
+
+  const note = para('An uncovered count is exposures with no observations '
+    + 'behind them; they are written with empty positions and the rest of the '
+    + 'flight is unaffected. Often the last frames of a folder, whose GNSS '
+    + 'log ends a few seconds before the shutter does.');
+  note.style.cssText = 'margin:10px 0 0;color:var(--ink-faint);font-size:11px';
+  nodes.push(note);
+
+  openModal('Flights', nodes);
 }
 
 /* ------------------------------- modal -------------------------------- */
@@ -744,8 +904,13 @@ document.addEventListener('keydown', (ev) => {
 async function checkCoverage() {
   if (!state.flights.length) return;
 
+  /* Both lists: the ticked folders are what the run will actually be given,
+     and the rest are what exists on disk. An exposure recorded in a folder
+     left unticked is recoverable by ticking it, and saying so is more use
+     than reporting it as missing. */
   const result = await pywebview.api.check_coverage(
-    state.flights.map((f) => f.path));
+    state.flights.map((f) => f.path),
+    selectedFlights().map((f) => f.path));
 
   if (!result.available) { state.coverage = {}; renderFlights(); return; }
 
@@ -1434,8 +1599,8 @@ async function showBaseDetails() {
   const base = await pywebview.api.base_details();
   if (!base) return;
 
-  const k = parseFloat($('#confidence').value);
-  const label = $('#confidence').selectedOptions[0].textContent.split(' (')[0];
+  const k = currentK();
+  const label = currentKText();
 
   const metres = (v) => (v == null ? '—' : v.toFixed(4) + ' m');
 
@@ -1528,6 +1693,21 @@ async function drawTracks() {
   );
 }
 
+/* Flights that will yield nothing at all: no MRK, so timestamps cannot be
+   matched, or not one exposure covered by both the base and the aircraft.
+ *
+ * Deliberately not "any flight with a flagged exposure". A 999-photo flight
+ * whose last seven shutter releases fall past the end of its own GNSS log is
+ * a normal folder boundary, and unticking it would discard 992 good photos to
+ * avoid seven empty rows. */
+function unusableFlights() {
+  return state.flights.filter((f) => {
+    const coverage = state.coverage[f.path];
+    return !f.mrk || (coverage && coverage.exposures > 0
+                      && coverage.outside === coverage.exposures);
+  });
+}
+
 function updateTally() {
   const on = selectedFlights();
   const photos = on.reduce((sum, f) => sum + f.photos, 0);
@@ -1539,6 +1719,8 @@ function updateTally() {
   const all = $('#chk-all');
   all.checked = on.length === state.flights.length && state.flights.length > 0;
   all.indeterminate = on.length > 0 && on.length < state.flights.length;
+
+  $('#btn-edit-flights').classList.toggle('hidden', state.flights.length === 0);
 }
 
 $('#chk-all').addEventListener('change', (ev) => {
@@ -2006,9 +2188,8 @@ function renderBase(base) {
   $('#res-lon').textContent = dms(base.lon_dd, 'E', 'W');
   $('#res-hgt').textContent = base.hgt.toFixed(4) + ' m';
 
-  const k = parseFloat($('#confidence').value);
-  const label = $('#confidence').selectedOptions[0].textContent.split(' (')[0];
-  $('#sigma-label').textContent = label;
+  const k = currentK();
+  $('#sigma-label').textContent = currentKText();
 
   const cells = ['#res-se', '#res-sn', '#res-su'];
   if (base.sigma_ENU) {
@@ -2022,7 +2203,7 @@ function renderBase(base) {
   /* Collapsed summary: frame, epoch and the uncertainty, in centimetres
      because that is the unit the number is argued about in. */
   const sigma = base.sigma_ENU
-    ? '  ·  ' + label + ' ' +
+    ? '  ·  ' + currentKText() + ' ' +
       base.sigma_ENU.map((s) => (s * k * 100).toFixed(1)).join(' / ') + ' cm'
     : '';
   $('#resolved-line').textContent =
@@ -2037,17 +2218,93 @@ function renderBase(base) {
 /* The multiplier depends on how many components the statement covers, so the
    caveat has to name the level actually selected. Pinned to 95%, it read as
    contradicting the dropdown whenever anything else was chosen. */
-const DIMENSION_K = {
-  '1': ['68.3% of a single component',
-        '39.4% of a horizontal ellipse',
-        '19.9% of a spatial ellipsoid'],
-  '1.960': ['95% per component (k = 1.960)',
-            'a 2-D horizontal ellipse at 95% needs k = 2.448',
-            'a 3-D spatial one at 95% needs k = 2.796'],
-  '2.576': ['99% per component (k = 2.576)',
-            'a 2-D horizontal ellipse at 99% needs k = 3.035',
-            'a 3-D spatial one at 99% needs k = 3.368'],
+/* Abramowitz & Stegun 7.1.26, good to 1.5e-7 - enough for a percentage shown
+   to the nearest whole number, and it avoids shipping a maths library for one
+   function the platform does not provide. */
+function erf(x) {
+  const sign = x < 0 ? -1 : 1;
+  const z = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * z);
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+                  - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+  return sign * y;
+}
+
+/* Probability that the error falls within k sigma, for a statement covering
+   one, two or three components. These are the chi-square CDFs at df = 1, 2
+   and 3 - the normal, Rayleigh and Maxwell cases. */
+function coverage(k) {
+  const g = Math.exp(-k * k / 2);
+  return [
+    erf(k / Math.SQRT2),
+    1 - g,
+    erf(k / Math.SQRT2) - k * Math.sqrt(2 / Math.PI) * g,
+  ];
+}
+
+/* The multiplier in force. Through one accessor so that a blank or nonsense
+   field cannot reach the arithmetic: k = 1 is the stored form, and is what
+   the field means when it is empty. */
+function currentK() {
+  const k = parseFloat($('#confidence').value);
+  return Number.isFinite(k) && k > 0 ? k : 1;
+}
+
+/* Always empty, so the Python side names the columns from the multiplier
+   itself - sigma_E_k2, sigma_E_k2.5 - and leaves them untouched at k = 1.
+   A confidence level is not asked for, so none is claimed in the name. */
+function currentKLabel() {
+  return '';
+}
+
+function currentKText() {
+  return 'k = ' + currentK().toFixed(3);
+}
+
+/* k = sqrt of the chi-square quantile at p with df equal to the number of
+   components covered; df = 1, 2, 3 are the normal, Rayleigh and Maxwell
+   cases. Held here so the interface and docs/pipeline.md cannot drift. */
+const K_TABLE = {
+  head: ['1σ (68.27%)', '90%', '95%', '99%'],
+  rows: [
+    ['1-D  per component', '1.000', '1.645', '1.960', '2.576'],
+    ['2-D  horizontal', '1.515', '2.146', '2.448', '3.035'],
+    ['3-D  spatial', '1.878', '2.500', '2.795', '3.368'],
+  ],
 };
+
+function showConfidenceTable() {
+  const nodes = [];
+  const k = currentK();
+  const pct = coverage(k).map((p) => (p * 100).toFixed(1) + '%');
+
+  nodes.push(para('k = ' + k.toFixed(3) + ' covers ' + pct[0] +
+    ' on each axis, ' + pct[1] + ' of a horizontal ellipse and ' + pct[2] +
+    ' of a 3-D one.'));
+  nodes.push(para('sigma_E, sigma_N and sigma_U are stated per component, so ' +
+    'the 1-D row is the one that applies to them. Reading a 2-D figure per ' +
+    'axis overstates each axis by 25% at 95%.'));
+
+  const table = document.createElement('table');
+  table.className = 'k-table';
+  const head = table.insertRow();
+  head.insertCell().textContent = '';
+  K_TABLE.head.forEach((h) => { head.insertCell().textContent = h; });
+  K_TABLE.rows.forEach((row) => {
+    const tr = table.insertRow();
+    row.forEach((cell) => { tr.insertCell().textContent = cell; });
+  });
+  nodes.push(table);
+
+  const note = para('Each entry is the square root of the chi-square quantile '
+    + 'at that probability, with degrees of freedom equal to the number of '
+    + 'components the statement covers.');
+  note.style.color = 'var(--ink-faint)';
+  note.style.fontSize = '11px';
+  nodes.push(note);
+
+  openModal('Uncertainty and the k factor', nodes);
+}
 
 /* The icon lives inside its label, so without this a click on it is forwarded
    to the control and opens the dropdown it is there to explain. Bound to every
@@ -2078,17 +2335,24 @@ $('#help-antenna').dataset.tip =
   'which is what a control point has to be.';
 
 function updateConfidenceHelp() {
-  const rows = DIMENSION_K[$('#confidence').value];
-  if (!rows) return;
+  const pct = coverage(currentK()).map((p) => (p * 100).toFixed(1) + '%');
+
+  /* Beside the field, because the number alone says nothing: k = 2 is a
+     common house convention and 95.4% is what it actually delivers. */
+  $('#confidence-hint').textContent = pct[0] + ' per component';
+
   $('#help-confidence').dataset.tip =
-    'Reported figure covers ' + rows[0] + '.\n' +
-    'Not a horizontal radius: ' + rows[1] + '.\n' +
-    'For a full 3-D statement, ' + rows[2] + '.';
+    'Per component: covers ' + pct[0] + ' on each axis.\n' +
+    'Only ' + pct[1] + ' of a horizontal ellipse — not a radius.\n' +
+    'Click for the table of usual values.';
 }
 
-/* Changing the confidence level rescales a result already on screen, rather
-   than leaving a number labelled with the wrong multiplier. */
-$('#confidence').addEventListener('change', () => {
+$('#help-confidence').addEventListener('click', showConfidenceTable);
+
+/* Changing k rescales a result already on screen, rather than leaving a
+   number labelled with the wrong multiplier. On `input` rather than `change`
+   so the hint tracks the spinner as it is clicked. */
+$('#confidence').addEventListener('input', () => {
   updateConfidenceHelp();
   if (state.basePosition) renderBase(state.basePosition);
   markExportDirty();
