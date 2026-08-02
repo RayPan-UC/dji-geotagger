@@ -373,13 +373,17 @@ def sum_file_parser(
     #
     # Only one correlation set is printed, and it is identical between a
     # propagated and a non-propagated solve of the same data - so those are the
-    # solution correlations, and nothing is published about how the
-    # velocity-grid error correlates across X/Y/Z. It is therefore added as an
-    # independent, diagonal term rather than by rescaling the solution
-    # correlations, which would fabricate off-diagonals that were never
-    # measured. This reproduces SIG_TOT exactly on the diagonal, keeps the
-    # matrix positive semi-definite, and matches how the rest of the pipeline
-    # combines independent error sources (cov_total = cov_PPK + cov_PPP).
+    # solution correlations, and the file says nothing about the propagation
+    # term's own structure. It is therefore added as an independent, diagonal
+    # term rather than by rescaling the solution correlations, which would
+    # impose a cross-axis structure the file never stated. Whether the
+    # velocity-grid error really is uncorrelated across X/Y/Z has not been
+    # established here; the diagonal form is the assumption that adds nothing
+    # unstated, not a claim that no correlation exists.
+    #
+    # This reproduces SIG_TOT exactly on the diagonal, keeps the matrix
+    # positive semi-definite, and matches how the rest of the pipeline combines
+    # independent error sources (cov_total = cov_PPK + cov_PPP).
     if sigma_tot_X is not None:
         sigma_total = np.array([sigma_tot_X, sigma_tot_Y, sigma_tot_Z]) / 1.96
         # Guard against a negative under the root if the columns ever disagree.

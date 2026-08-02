@@ -2,7 +2,13 @@
 
 **A precise PPK + MRK-based geotagging tool for DJI RTK drones**
 
-This Python library enables centimetre-level camera geotagging by combining PPK `.pos` solutions, DJI `.MRK` gimbal offset corrections, and EXIF/XMP metadata from DJI RTK drone images. It is designed for photogrammetry and remote sensing workflows that require accurate EOPs.
+This Python library computes centimetre-level camera positions for DJI RTK
+drone imagery. It takes the raw GNSS logs and the flight folders, converts
+them to RINEX, resolves the base station through CSRS-PPP, runs a differential
+PPK solution against it, applies the DJI `.MRK` lever arm to reach the camera
+centre, and writes one row per photo in the coordinate system you specify,
+each with its own uncertainty. It is designed for photogrammetry and remote
+sensing workflows that require accurate EOPs.
 
 ![The desktop front end after a run: four configuration steps on the left, and
 5,111 corrected camera centres on the map, coloured by their own horizontal
@@ -11,14 +17,35 @@ uncertainty.](https://raw.githubusercontent.com/geo-raypan/dji-geotagger/main/do
 
 ## Features
 
+**End to end, with nothing to do by hand**
+
+- **Automated CSRS-PPP** — submits the base observation, polls, downloads and
+  parses the result, including the epoch-propagation term. No account, no
+  browser, no `.sum` to fetch yourself
 - Convert raw GNSS logs (`.bin`, `.dat`) to RINEX using RTKLIB `convbin`
 - Download precise ephemeris (SP3/CLK) automatically from IGS
-- Run differential PPK (rover against base) with RTKLIB `rnx2rtkp`
-- Resolve the base station position from CSRS-PPP (submitted automatically or from a `.sum`) or known coordinates
-- Apply the DJI `.MRK` lever arm to the camera centre, propagating full 3×3 covariance
-- Transform to any CRS, with guards against PROJ's silent failure modes
-- Batch multiple flight folders with per-flight error isolation, optionally in parallel
+- Run differential PPK (rover against base) with RTKLIB `rnx2rtkp`, fetched on
+  first use — nothing to install
+- Base position from CSRS-PPP, an existing `.sum`, or published coordinates
+- Apply the DJI `.MRK` lever arm to reach the camera centre, per exposure
+- Batch multiple flight folders with per-flight error isolation, optionally in
+  parallel
+
+**Results you can defend**
+
+- Rover and base uncertainties combined as full 3×3 covariance matrices, so
+  inter-axis correlations survive into the reported sigma
+- Frame and epoch carried through to the output, because a centimetre
+  coordinate without them cannot be checked or reused
+- Transform to any CRS, with PROJ's silent failure modes — ballpark datum
+  shifts, unversioned EPSG codes that discard a 1.6 m shift — raised as errors
+  rather than absorbed
+- Indefinite RTKLIB covariances detected and flagged instead of passed on
+
+**Interfaces**
+
 - Desktop front end with a map, quality colouring and a validating CRS picker
+- Ships as a Python package or a standalone Windows executable
 
 ## Installation
 
@@ -217,33 +244,26 @@ target frame, and a projected target adds two more:
 
 Skipped flights are listed in `geotag_df.attrs["failed_flights"]`.
 
-## Covariance / Uncertainty Model
+`sigma_E/N/U` are **1σ**; the desktop front end offers 1σ / 95% / 99% and
+renames the columns when it rescales them, so `sigma_E_95` can never be
+mistaken for `sigma_E`. Set `base_error_propagation_on=False` for rover-only
+precision. **Treat the reported sigma as a lower bound** — see the uncertainty
+model below for what is and is not in it.
 
-The reported per-image uncertainty combines **two independent error sources as
-full 3×3 covariance matrices in ECEF**, then rotates the result into local ENU:
+## Method
 
-$$\Sigma_{\text{total}} = \Sigma_{\text{PPK}} + \Sigma_{\text{PPP}}$$
+What the tool actually does to your data, with the frames, formulas and the
+measurements that back them:
 
-$$\Sigma_{\text{ENU}} = R \Sigma_{\text{total}} R^{\top}$$
-
-- $\Sigma_{\text{PPK}}$ — per-epoch rover precision from the RTKLIB `.pos` solution
-- $\Sigma_{\text{PPP}}$ — base station precision from the CSRS-PPP `.sum`, including the epoch-propagation term when one applies
-- $R$ — the ECEF → ENU rotation at the epoch's latitude/longitude
-
-Working at the matrix level preserves inter-axis correlations. Set
-`base_error_propagation_on=False` for rover-only precision.
-
-### ⚠️ The reported sigma is slightly optimistic
-
-Treat it as a lower bound. Not propagated: linear interpolation between GNSS
-epochs, camera/GNSS clock offset, lever-arm error, and the coordinate
-transformation's own error.
-
-A small fraction of RTKLIB epochs report an indefinite covariance matrix,
-which cannot be used as a bundle-adjustment weight. `pos2df()` detects these
-and substitutes the nearest valid epoch's matrix (`fix_bad_covariance=True`,
-the default); positions are never altered and repaired epochs are flagged in
-`cov_repaired`.
+- **[How a camera centre is computed](docs/pipeline.md)** — PPP → PPK → MRK →
+  camera centre as a diagram, the frames and rotation matrices, why the steps
+  are in that order, and where the pipeline produces NaN rather than a guess.
+  Includes the **[uncertainty model](docs/pipeline.md#the-uncertainty-model)**:
+  what CSRS-PPP's sigma covers, what happens when you supply your own, why
+  zero is refused, how the *k* factor is applied, and what is left out.
+- **[Camera attitude](docs/attitude.md)** — where yaw, pitch and roll come
+  from, what the `DGT_*` normalization changes, and how the rotation sequence
+  was determined from DJI's own data rather than assumed.
 
 ## Key Functions
 
