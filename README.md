@@ -46,6 +46,10 @@ open.
 python -c "from dji_geotagger.gui import launch; launch()"
 ```
 
+A standalone Windows build needing no Python is on the
+[releases page](https://github.com/geo-raypan/dji-geotagger/releases). It is
+unsigned, so SmartScreen asks once: *More info* → *Run anyway*.
+
 Four steps, each unlocked by the one before it: base station, base position,
 flights, output.
 
