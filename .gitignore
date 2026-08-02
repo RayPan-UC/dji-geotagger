@@ -26,6 +26,10 @@ dev/
 *.bin
 *.dat
 
+# The one image that is documentation rather than survey data. Everything
+# under docs/ is written to be published; survey imagery never goes there.
+!docs/screenshot.jpg
+
 # VSCode
 .vscode/
 

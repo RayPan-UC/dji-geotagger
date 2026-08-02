@@ -4,6 +4,10 @@
 
 This Python library enables centimetre-level camera geotagging by combining PPK `.pos` solutions, DJI `.MRK` gimbal offset corrections, and EXIF/XMP metadata from DJI RTK drone images. It is designed for photogrammetry and remote sensing workflows that require accurate EOPs.
 
+![The desktop front end after a run: four configuration steps on the left, and
+5,111 corrected camera centres on the map coloured by their own horizontal
+uncertainty.](docs/screenshot.jpg)
+
 ## Features
 
 - Convert raw GNSS logs (`.bin`, `.dat`) to RINEX using RTKLIB `convbin`
