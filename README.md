@@ -7,7 +7,7 @@ This Python library enables centimetre-level camera geotagging by combining PPK 
 ![The desktop front end after a run: four configuration steps on the left, and
 5,111 corrected camera centres on the map, coloured by their own horizontal
 uncertainty and clickable down to the exposure, its preview and its full
-uncertainty.](docs/screenshot.jpg)
+uncertainty.](https://raw.githubusercontent.com/geo-raypan/dji-geotagger/main/docs/screenshot.jpg)
 
 ## Features
 
