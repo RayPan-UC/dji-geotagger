@@ -22,12 +22,6 @@ dependencies = [
   "pymap3d"
 ]
 
-[project.optional-dependencies]
-# The desktop front end. Kept out of the base install so that a headless
-# script - or a CI job - does not pull in a GUI toolkit it will never open.
-#   pip install dji-geotagger[gui]
-gui = ["pywebview>=5"]
-
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: BSD License",
@@ -35,6 +29,14 @@ classifiers = [
   "Topic :: Scientific/Engineering :: GIS",
   "Topic :: Scientific/Engineering :: Image Recognition",
 ]
+
+# Kept below the keys of [project]: a TOML table runs until the next header,
+# so anything after this one belongs to it.
+[project.optional-dependencies]
+# The desktop front end. Kept out of the base install so that a headless
+# script - or a CI job - does not pull in a GUI toolkit it will never open.
+#   pip install dji-geotagger[gui]
+gui = ["pywebview>=5"]
 
 [project.urls]
 "Homepage" = "https://github.com/geo-raypan/dji-geotagger"
