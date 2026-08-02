@@ -1,6 +1,6 @@
 [project]
 name = "dji-geotagger"
-version = "3.0.0"
+version = "3.0.1"
 description = "A precise PPK + MRK-based geotagging tool for DJI RTK drones"
 authors = [{name = "Ray Pan", email = "hungwei.pan2@ucalgary.ca"}]
 license = {text = "BSD-2-Clause"}
