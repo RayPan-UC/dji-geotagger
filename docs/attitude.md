@@ -43,9 +43,10 @@ is why its attitude is reported separately from the aircraft's: yaw about the
 vertical mount, pitch about the horizontal axis through the camera, and roll
 about the optical axis.
 
-The rotation sequence is **intrinsic Z-Y-X** (yaw, then pitch, then roll):
+The rotation sequence is **intrinsic Z-Y-X** (yaw, then pitch, then roll),
+taking the camera body into the local NED frame:
 
-$$R_{\text{NED}\leftarrow\text{body}} = R_z(\psi)\,R_y(\theta)\,R_x(\phi)$$
+$$R = R_z(\psi) R_y(\theta) R_x(\phi)$$
 
 Stated in the *Matrice 4 Series* manual (p. 89) as "NED coordinate system,
 the rotation order is ZYX", and confirmed against the data rather than taken
@@ -150,11 +151,13 @@ To build $R$ yourself, use the sequence above, and note one trap:
 90° added for reporting, so feeding it into $R_y$ points the camera a quarter
 turn away from where it was looking:
 
-$$\theta = \texttt{DGT\textunderscore PitchDegree} - 90^\circ$$
+$$\theta = \text{DGT pitch} - 90^\circ$$
 
-Chaining onto the frame conversion gives the orientation in ECEF:
+Chaining onto the frame conversion gives the orientation in ECEF. Writing
+$R_{\text{ne}}$ for the NED → ECEF rotation of
+[the pipeline note](pipeline.md#ned-to-ecef):
 
-$$R_{\text{ECEF}\leftarrow\text{body}} = R_{\text{NED}\rightarrow\text{ECEF}}(\varphi, \lambda)\; R_{\text{NED}\leftarrow\text{body}}(\psi, \theta, \phi)$$
+$$R_{\text{ECEF}} = R_{\text{ne}}(\varphi, \lambda) R(\psi, \theta, \phi)$$
 
 using that exposure's own latitude and longitude for the first factor — the
 same per-record local frame the lever arm uses.

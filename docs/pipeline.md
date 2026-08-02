@@ -148,13 +148,15 @@ because D points opposite to U — gives what
 $$
 \begin{bmatrix} \Delta X \\\\ \Delta Y \\\\ \Delta Z \end{bmatrix}
 =
-\underbrace{\begin{bmatrix}
+\begin{bmatrix}
 -\sin\varphi\cos\lambda & -\sin\lambda & -\cos\varphi\cos\lambda \\\\
 -\sin\varphi\sin\lambda & \cos\lambda & -\cos\varphi\sin\lambda \\\\
 \cos\varphi & 0 & -\sin\varphi
-\end{bmatrix}}_{R_{\text{NED}\rightarrow\text{ECEF}}}
+\end{bmatrix}
 \begin{bmatrix} \Delta N \\\\ \Delta E \\\\ \Delta D \end{bmatrix}
 $$
+
+That 3×3 is the NED → ECEF rotation, written $R$ from here on.
 
 $\varphi$ and $\lambda$ are that exposure's own latitude and longitude, taken
 from the MRK. The frame is local, so it has to be rebuilt for every record —
