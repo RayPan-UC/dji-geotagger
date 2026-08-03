@@ -19,17 +19,25 @@ def raw2rinex(
     progress=None,
     ) -> tuple[Path, Path]:
     """
-    Convert raw GNSS files (.dat, .bin) to RINEX format using RTKLIB convbin.
+    Convert raw GNSS files (.dat, .bin, .RTK) to RINEX using RTKLIB convbin.
 
     File Type Mapping
     -----------------
-    - .bin → Rover (UAV) GNSS data
+    - .bin → Rover (UAV) GNSS data, written by a P1 or similar camera payload
+    - .RTK → Rover (UAV) GNSS data, written by an L2
     - .dat → Base station GNSS data
+
+    All three are RTCM 3. The L2 names its stream differently and puts a short
+    preamble in front of it, which convbin skips by resynchronising on the
+    first frame; the contents are the same MSM5 observations and ephemerides
+    a P1 folder carries. The L2's other sidecars are not RTCM - in particular
+    ``.RTB``, despite the name, is not the base's corrections in any form
+    convbin reads.
 
     Parameters
     ----------
     input_path : str | Path
-        Path to raw GNSS file (.bin or .dat).
+        Path to raw GNSS file (.bin, .RTK or .dat).
     output_dir : str | Path, optional
         Output base directory for RINEX files. If not provided, defaults to current working directory.
         RINEX files will be saved to: `output_dir/DGT_output/RINEX/{rover(UAV)|base}/`
@@ -66,7 +74,7 @@ def raw2rinex(
     ValueError
         If `appr_time` format is invalid, or if no valid timestamp can be parsed from filename.
     ValueError
-        If file extension is not .bin or .dat.
+        If file extension is not .bin, .rtk or .dat.
     RuntimeError
         If RTKLIB convbin conversion fails.
 
@@ -118,12 +126,14 @@ def raw2rinex(
     base_out = Path(output_dir) if output_dir else Path.cwd()
 
     suffix = input_path.suffix.lower()
-    if suffix == ".bin":
+    if suffix in (".bin", ".rtk"):
         type_dir = "rover(UAV)"
     elif suffix == ".dat":
         type_dir = "base"
     else:
-        raise ValueError(f"[ERROR] Unsupported file extension: {suffix} (expect .bin or .dat)")
+        raise ValueError(
+            f"[ERROR] Unsupported file extension: {suffix} "
+            "(expect .bin, .rtk or .dat)")
 
     rinex_dir = base_out / "DGT_output" / "RINEX" / type_dir
     rinex_dir.mkdir(parents=True, exist_ok=True)
@@ -142,9 +152,13 @@ def raw2rinex(
     cmd = [
         str(convbin),
         "-r", "rtcm3",
-        "-tr", dt.strftime("%Y/%m/%d %H:%M:%S"),
-        # convbin documents this as "antenna delta h/e/n", height first. It is
-        # also not enough on its own - see _force_antenna_delta below.
+        # Two argv tokens, not one. convbin parses the date from the token
+        # after -tr and the time from the one after that, so a single
+        # "Y/m/d H:M:S" string makes it swallow whichever option follows -
+        # here -hd, silently, which is how the antenna height came to be
+        # dropped for so long.
+        "-tr", dt.strftime("%Y/%m/%d"), dt.strftime("%H:%M:%S"),
+        # convbin documents this as "antenna delta h/e/n", height first.
         "-hd", f"{ah}/0/0",
         "-o", str(obs_path),
         "-n", str(nav_path),
@@ -181,20 +195,24 @@ def raw2rinex(
 def _force_antenna_delta(obs_path: Path, height: float,
                          east: float = 0.0, north: float = 0.0) -> None:
     """
-    Write the antenna delta into a converted RINEX header.
+    Ensure the antenna delta is in a converted RINEX header.
 
-    ``convbin -hd`` is not sufficient for an RTCM stream. RTCM message 1006
-    carries an antenna height of its own, and the decoder applies it over
-    anything given on the command line. A DJI DRTK-3 broadcasts 1006 with that
-    field set to 0.0000, so the measured height was silently discarded and the
-    header always read::
+    Normally ``convbin -hd`` has already written it and this returns without
+    touching the file. The check is kept because the consequence of a missing
+    delta is not cosmetic: with no delta the solution refers to the antenna
+    reference point rather than the ground mark, so a 2 m tripod puts the base
+    2 m too high - and the base height propagates into every camera position.
+    CSRS-PPP shows the value it received as "ARP to Marker" on the report.
+
+    This originally existed because every converted header read::
 
         0.0000        0.0000        0.0000      ANTENNA: DELTA H/E/N
 
-    That is not cosmetic. With no delta the solution refers to the antenna
-    reference point rather than the ground mark, so a 2 m tripod put the base
-    2 m too high - and the base height propagates into every camera position.
-    CSRS-PPP shows the value it received as "ARP to Marker" on the report.
+    which was assumed to be the decoder preferring the antenna height carried
+    in RTCM message 1006 - a DJI D-RTK 3 broadcasts 1006 with that field set
+    to 0.0000. Measured since, on a base file with 17,123 of those messages:
+    ``-hd`` is applied and 1006 does not override it. The real cause was that
+    ``-tr`` was being passed as one argv token and was swallowing ``-hd``.
 
     The line is fixed-format: three F14.4 fields, label at column 61.
     """
