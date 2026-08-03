@@ -42,6 +42,40 @@ DEFAULT_FORMAT = "[%(levelname)s] %(message)s"
 _console_handler: logging.Handler | None = None
 
 
+class _EncodingSafeStreamHandler(logging.StreamHandler):
+    """
+    A stream handler that survives a destination which cannot spell.
+
+    Messages here contain the odd non-ASCII character - a tick on success, a
+    degree sign, a sigma. A Windows console handles them, because Python
+    writes to it through the wide API. A *redirected* stdout does not: it
+    takes the locale encoding, and ``python -m dji_geotagger > log.txt`` on a
+    cp1252 or cp950 machine raised ``UnicodeEncodeError`` on every line
+    carrying one.
+
+    Nothing crashed - :mod:`logging` catches the error, prints
+    ``--- Logging error ---`` and a traceback to stderr, and carries on - but
+    the line itself was lost among a screenful of noise.
+
+    Characters the destination cannot represent are escaped rather than
+    dropped, so nothing disappears silently.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            text = self.format(record)
+            encoding = getattr(self.stream, "encoding", None)
+            if encoding:
+                text = text.encode(encoding, "backslashreplace").decode(
+                    encoding, "replace")
+            self.stream.write(text + self.terminator)
+            self.flush()
+        except RecursionError:  # as logging.Handler itself does
+            raise
+        except Exception:  # noqa: BLE001 - a log line must not stop the run
+            self.handleError(record)
+
+
 def configure_logging(
     level: int | str = logging.INFO,
     console: bool = True,
@@ -85,8 +119,8 @@ def configure_logging(
         _console_handler = None
 
     if console:
-        handler = logging.StreamHandler(stream if stream is not None
-                                        else sys.stdout)
+        handler = _EncodingSafeStreamHandler(stream if stream is not None
+                                             else sys.stdout)
         handler.setFormatter(logging.Formatter(fmt))
         logger.addHandler(handler)
         _console_handler = handler
