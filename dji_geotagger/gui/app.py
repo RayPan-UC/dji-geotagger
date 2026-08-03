@@ -263,6 +263,128 @@ def _scale_sigma(df, k: float, label: str):
 _ROVER_JOIN_TOLERANCE_S = 1.0
 
 
+# GPS MSM observation messages. Their header carries the epoch as a 30-bit
+# time of week in milliseconds; the other constellations count from their own
+# origins, so only these are read.
+_GPS_MSM = range(1071, 1078)
+
+# Keyed by (path, size, mtime), because a folder's window does not change
+# unless its file does - and check_coverage asks for the same folders three
+# times over between the selection and the lending check.
+_rover_span_cache: dict[tuple, tuple[float, float] | None] = {}
+
+
+def _rtcm_tow_range(path: Path) -> tuple[float, float] | None:
+    """
+    First and last GPS time-of-week in a raw log, without converting it.
+
+    A P1 folder ships DJI's own ``*_PPKOBS.obs`` and the window can be read
+    from its header. An L2 folder ships no RINEX at all, so the alternative
+    was to leave the aircraft's window unknown and check the base alone -
+    which reports an exposure as covered when the aircraft was not recording
+    it.
+
+    Walking the frames costs about 0.05 s for a 9 MB log, against seconds for
+    a conversion, so it is cheap enough to do while folders are being added.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+
+    index, end = 0, len(data) - 6
+    first = last = None
+    while index < end:
+        if data[index] != 0xD3:
+            index += 1
+            continue
+        length = ((data[index + 1] & 0x03) << 8) | data[index + 2]
+        if length < 7 or index + 6 + length > len(data):
+            index += 1
+            continue
+
+        payload = data[index + 3:index + 3 + length]
+        if ((payload[0] << 4) | (payload[1] >> 4)) in _GPS_MSM:
+            # Message number and station id take the first 24 bits; the epoch
+            # is the 30 that follow.
+            tow = _rtcm_bits(payload, 24, 30) / 1000.0
+            if first is None:
+                first = tow
+            last = tow
+
+        index += 6 + length
+
+    if first is None or last is None or last < first:
+        # last < first means the log crossed the GPS week rollover, which
+        # nothing downstream handles either.
+        return None
+    return first, last
+
+
+def _rover_span(folder: Path) -> tuple[float, float] | None:
+    """
+    When the aircraft was recording in one flight folder, in GPS seconds.
+
+    Prefers DJI's converted observations and falls back to the raw log, whose
+    epochs are times of week only - the week comes from the folder's MRK,
+    which is written by the same flight.
+    """
+    logger = logging.getLogger("dji_geotagger")
+
+    obs = next(iter(folder.glob("*_PPKOBS.obs")), None)
+    if obs is not None:
+        try:
+            first, last = parse_obs_time_range(obs)
+            return _gps_seconds(first), _gps_seconds(last)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read %s: %s", obs.name, exc)
+            return None
+
+    try:
+        # .RTK is matched case-insensitively rather than with a second glob,
+        # which is case-sensitive off Windows.
+        raw = next(iter(folder.glob("*_PPKRAW.bin")), None) or next(
+            (p for p in folder.iterdir()
+             if p.is_file() and p.suffix.lower() == ".rtk"), None)
+    except OSError:
+        return None
+    if raw is None:
+        return None
+
+    mrk = next((p for p in folder.glob("*.MRK")), None) \
+        or next((p for p in folder.glob("*.mrk")), None)
+    if mrk is None:
+        return None
+
+    try:
+        week = float(mrk2df(str(mrk))["GPS_week"].iloc[0])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read %s: %s", mrk.name, exc)
+        return None
+
+    span = _rtcm_tow_range(raw)
+    if span is None:
+        logger.warning("No GPS epochs found in %s; the aircraft's recording "
+                       "window is unknown for this flight.", raw.name)
+        return None
+
+    offset = week * 604800.0
+    return span[0] + offset, span[1] + offset
+
+
+def _cached_rover_span(folder: Path) -> tuple[float, float] | None:
+    """`_rover_span`, remembered - it is asked for the same folders repeatedly."""
+    try:
+        stamp = folder.stat().st_mtime
+    except OSError:
+        return None
+
+    key = (str(folder), stamp)
+    if key not in _rover_span_cache:
+        _rover_span_cache[key] = _rover_span(folder)
+    return _rover_span_cache[key]
+
+
 def _merged_rover_spans(paths: list[str]) -> list[tuple[float, float]]:
     """
     One set of continuous intervals for the whole selection.
@@ -279,15 +401,9 @@ def _merged_rover_spans(paths: list[str]) -> list[tuple[float, float]]:
     logger = logging.getLogger("dji_geotagger")
     spans = []
     for path in paths:
-        obs = next(iter(Path(path).glob("*_PPKOBS.obs")), None)
-        if obs is None:
-            continue
-        try:
-            first, last = parse_obs_time_range(obs)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not read %s: %s", obs.name, exc)
-            continue
-        spans.append((_gps_seconds(first), _gps_seconds(last)))
+        span = _cached_rover_span(Path(path))
+        if span is not None:
+            spans.append(span)
 
     if not spans:
         return []
@@ -330,14 +446,10 @@ def _lending_folders(selected: list[str], discovered: list[str]) -> list[str]:
 
     lending = []
     for path in others:
-        obs = next(iter(Path(path).glob("*_PPKOBS.obs")), None)
-        if obs is None:
+        span = _cached_rover_span(Path(path))
+        if span is None:
             continue
-        try:
-            first, last = parse_obs_time_range(obs)
-        except Exception:  # noqa: BLE001
-            continue
-        start, end = _gps_seconds(first), _gps_seconds(last)
+        start, end = span
         # Abuts a selected span at either end, so joining it extends the
         # trajectory rather than adding an island somewhere else in the day.
         if any(abs(start - b) <= _ROVER_JOIN_TOLERANCE_S
