@@ -533,7 +533,10 @@ const actions = {
       epoch: $('#ppp-epoch').value,
       force: $('#ppp-force').checked,
       sumFile: state.sumFile && state.sumFile.path,
-      k: parseFloat($('#confidence').value),
+      /* Through the accessor, like every other reader: a blank field parses
+         to NaN and a negative one survives `or 1.0` on the Python side, where
+         it would scale every sigma by a negative number. */
+      k: currentK(),
       manual: {
         lat: $('#man-lat').value, lon: $('#man-lon').value,
         hgt: $('#man-hgt').value, frame: $('#man-frame').value,
