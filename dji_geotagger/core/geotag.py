@@ -28,6 +28,25 @@ logger = get_logger(__name__)
 _MAX_INTERPOLATION_GAP_S = 5.0
 
 
+def _rover_raw_files(flight_dir: Path) -> list[Path]:
+    """
+    The aircraft's raw GNSS log in a flight folder, whatever the payload.
+
+    A P1 folder holds one ``*_PPKRAW.bin``; an L2 folder holds one ``*.RTK``
+    instead, alongside a dozen sidecars of its own. Both are RTCM 3 carrying
+    the same MSM5 observations, so only the name differs.
+
+    Suffix matching is done here rather than with a second glob because
+    ``Path.glob`` is case-sensitive off Windows and DJI writes ``.RTK`` in
+    upper case.
+    """
+    named = sorted(flight_dir.glob("*_PPKRAW.bin"))
+    if named:
+        return named
+    return sorted(p for p in flight_dir.iterdir()
+                  if p.is_file() and p.suffix.lower() == ".rtk")
+
+
 def merge_trajectories(frames: list[pd.DataFrame]) -> pd.DataFrame:
     """
     Join per-flight trajectories into the one recording they came from.
@@ -92,7 +111,8 @@ def geotag(
     High-level API: run an end-to-end DJI geotagging pipeline for one or more flight folders.
 
     For each flight folder, this function:
-      1) Detects the rover raw GNSS log (*_PPKRAW.bin) and converts it to RINEX via `raw2rinex`.
+      1) Detects the rover raw GNSS log (*_PPKRAW.bin for a P1, *.RTK for an
+         L2) and converts it to RINEX via `raw2rinex`.
       2) Runs RTKLIB PPK (`process_ppk`) to generate a rover trajectory in ECEF (and covariance).
       3) Parses the DJI MRK file (*.MRK) via `mrk2df` to obtain exposure epochs and lever-arm offsets.
       4) Parses image XMP metadata from the flight folder via `parse_img_dir`.
@@ -103,7 +123,7 @@ def geotag(
     ----------
     flight_folders : list[str] | list[Path]
         A list of DJI flight directories. Each folder must contain:
-        - one rover GNSS raw file matching "*_PPKRAW.bin"
+        - one rover GNSS raw file matching "*_PPKRAW.bin" or "*.RTK"
         - one MRK file matching "*.MRK"
         - image files readable by `parse_img_dir` (e.g., *.jpg / *.tif with DJI XMP)
     base_obs : str | Path
@@ -259,9 +279,10 @@ def geotag(
         # distinguishable; sequentially it is the same behaviour with a label.
         flight_progress = progress.tagged(flight_dir.name)
 
-        rover_raws = list(flight_dir.glob("*_PPKRAW.bin"))
+        rover_raws = _rover_raw_files(flight_dir)
         if not rover_raws:
-            raise FileNotFoundError(f"No *_PPKRAW.bin found in {flight_dir}")
+            raise FileNotFoundError(
+                f"No rover GNSS log (*_PPKRAW.bin or *.RTK) in {flight_dir}")
         rover_obs, _ = raw2rinex(rover_raws[0], progress=flight_progress)
 
         pos_df = process_ppk(

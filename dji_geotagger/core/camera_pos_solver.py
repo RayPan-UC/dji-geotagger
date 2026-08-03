@@ -69,15 +69,43 @@ def compute_camera_position(
     return exposure_df
 
 
+def _sequence_from_names(names: pd.Series) -> pd.Series:
+    """
+    DJI's own exposure number for each image, read from the file name.
+
+    The name is ``DJI_<14-digit timestamp>_<4-digit exposure>[_<band>].<ext>``,
+    and it is the four-digit field that the MRK's first column counts. Taken
+    together they pair the two tables without assuming either is complete or
+    starts at one.
+
+    Returns 1-based positions instead if any name does not carry the field,
+    which is the older behaviour and is right for a folder of renamed images.
+    """
+    numbers = names.str.extract(r"_(\d{14})_(\d{4})(?:\D|$)")[1]
+    if numbers.isna().any():
+        logger.info(
+            "Image names carry no DJI exposure number; pairing with the MRK "
+            "by sorted position instead.")
+        return pd.Series(range(1, len(names) + 1), index=names.index)
+    return numbers.astype(int)
+
+
 def match_mrk_xml(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
     """
     Merge MRK records with image metadata by DJI exposure sequence index (`seq`).
 
     Notes
     -----
-    - DJI MRK `seq` is 1-based.
-    - This function sorts `img_df` by `FileName` and assigns `seq = index + 1`.
-      (i.e., it assumes filename order matches exposure order.)
+    - DJI MRK `seq` is 1-based, and matches the number DJI puts in the file
+      name: ``DJI_20250723124211_0001_D.JPG`` is exposure 1.
+    - The number is read from the file name, not from the sorted position.
+      Position works only when a folder's first photo is 0001, which is the
+      usual case but not a rule. An L2 folder measured here begins at 0003,
+      and a P1 folder left behind by an aborted flight held only 0002 - in
+      both, position-based numbering pairs every image with the wrong MRK
+      record, silently, and drops the overhang at the end.
+    - Falls back to sorted position when the names carry no such number, so
+      non-DJI naming keeps working.
     - Uses an inner join; unmatched rows on either side are dropped.
 
     Parameters
@@ -93,7 +121,7 @@ def match_mrk_xml(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
         Merged exposure metadata table with MRK + image fields.
     """
     img_df = img_df.sort_values("FileName").reset_index(drop=True)
-    img_df["seq"] = img_df.index + 1  # 1-based
+    img_df["seq"] = _sequence_from_names(img_df["FileName"])
 
     # merge
     exposure_meta_df = pd.merge(mrk_df, img_df, on="seq", how="inner", suffixes=("_mrk", "_xml"))

@@ -16,7 +16,7 @@ flowchart TD
     end
 
     subgraph ROVER ["Rover — per flight, optionally in parallel"]
-        R1["Rover raw log<br><code>*_PPKRAW.bin</code>"]
+        R1["Rover raw log<br><code>*_PPKRAW.bin</code> or <code>*.RTK</code>"]
         R2["<b>raw2rinex</b><br>RTKLIB convbin"]
         R3["<b>process_ppk</b><br>RTKLIB rnx2rtkp<br>rover against base"]
         R4["Trajectory <code>.pos</code><br>antenna X Y Z per epoch<br>+ &Sigma;<sub>PPK</sub>"]
@@ -33,7 +33,7 @@ flowchart TD
     end
 
     P1["<b>pos2df</b><br>&Sigma;<sub>total</sub> = &Sigma;<sub>PPK</sub> + &Sigma;<sub>PPP</sub><br>rotate to ENU"]
-    C1["<b>match_mrk_xml</b><br>join on sequence index"]
+    C1["<b>match_mrk_xml</b><br>join on DJI exposure number"]
     C2["<b>interpolate_pos_at_exposure</b><br>antenna position at exposure time"]
     C3["<b>apply_gimbal_correction</b><br>cam = antenna + lever arm"]
     C4["<b>transform_coordinates</b><br>target CRS, sigma via Jacobian<br><i>optional</i>"]
@@ -175,6 +175,34 @@ $[\hat{e}_E \mid \hat{e}_N \mid \hat{e}_U]^{\top}$ and applies it as a
 congruence rather than to a vector, because a covariance transforms as
 $R \Sigma R^{\top}$, not as $R x$. `ENU2ECEF_vec()` is its exact inverse —
 $R$ is orthonormal, so the transpose is the inverse.
+
+## Which photo is which exposure
+
+The MRK records exposures; the folder holds photos. Nothing in either file
+links them directly, so the join is on DJI's own exposure number — the MRK's
+first column, and the four-digit field in the file name.
+
+The obvious alternative, pairing the *n*th photo with the *n*th MRK record,
+is wrong often enough to matter. It assumes the folder starts at `0001`, and
+two cases here do not: an L2 folder begins at `0003`, and a P1 folder left
+behind by an aborted flight held only `0002`. In the first, every photo is
+paired with the exposure two shutter intervals away — several metres of
+flying — and the overhang at the end is dropped; in the second the single
+photo matches nothing and the folder yields no rows at all. Neither failure
+announces itself, because the counts still look nearly right.
+
+Measured over one survey, all 27 folders: pairing by name changes nothing in
+any of the twelve P1 folders that begin at `0001`, recovers the one that does
+not, and corrects every L2 folder — the L2 never begins at `0001`.
+
+Photos renamed out of the DJI convention fall back to sorted position, which
+is the only thing left to go on.
+
+**The rover log is named by payload.** A P1 folder holds one `*_PPKRAW.bin`;
+an L2 folder holds one `*.RTK` instead, among a dozen sidecars of its own.
+Both are RTCM 3 carrying the same MSM5 observations and ephemerides, so only
+the name differs. The L2's other sidecars are not RTCM — `.RTB` included,
+despite the name.
 
 ## Placing an exposure on the trajectory
 
