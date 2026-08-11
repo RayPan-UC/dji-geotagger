@@ -22,6 +22,7 @@ const state = {
   basePosition: null,
   tracks: {},          // flight path -> track, cached so toggling never refetches
   coverage: {},        // flight path -> base-coverage result
+  coverageSaid: null,  // last coverage summary logged, so it is not repeated
   emails: [],          // addresses that have worked, most recent first
   running: false,
   resolving: false,
@@ -651,8 +652,11 @@ function renderFlights() {
     const coverage = state.coverage[flight.path];
     const flagged = coverage && coverage.outside > 0;
     /* Everything, or nearly so: nothing usable will come out of this flight,
-       which is a different statement from "a few exposures at the edge". */
-    const lost = flagged && coverage.outside === coverage.exposures;
+       which is a different statement from "a few exposures at the edge".
+       Recoverable ones are excluded - observations that exist but are not
+       ticked are a selection to change, not a flight to write off. */
+    const lost = flagged && coverage.outside === coverage.exposures
+                 && !coverage.recoverable;
 
     const row = document.createElement('div');
     row.className = 'list-item' + (flight.on ? '' : ' off') +
@@ -798,7 +802,8 @@ function reviewFlights() {
       const coverage = state.coverage[flight.path];
       const out = coverage ? coverage.outside : 0;
       const dead = !flight.mrk
-        || (coverage && coverage.exposures > 0 && out === coverage.exposures);
+        || (coverage && coverage.exposures > 0 && out === coverage.exposures
+            && !coverage.recoverable);
 
       const tr = body.insertRow();
       tr.className = (flight.on ? '' : 'off ') + (dead ? 'dead' : '');
@@ -915,7 +920,12 @@ async function checkCoverage() {
     state.flights.map((f) => f.path),
     selectedFlights().map((f) => f.path));
 
-  if (!result.available) { state.coverage = {}; renderFlights(); return; }
+  if (!result.available) {
+    state.coverage = {};
+    state.coverageSaid = null;
+    renderFlights();
+    return;
+  }
 
   state.coverage = {};
   let flagged = 0;
@@ -924,10 +934,17 @@ async function checkCoverage() {
     if (f.outside > 0) flagged++;
   });
 
-  log('[INFO] Base observations cover ' + result.base_start + ' to ' +
-      result.base_end + '.');
-  if (flagged) {
-    log('[WARN] ' + flagged + ' flight(s) have exposures outside that window.');
+  /* Ticking a box re-runs the check, and the answer is usually the one already
+     on screen. Logged only when it changes, or the Log tab becomes a hundred
+     copies of the same two lines and the real events are lost among them. */
+  const said = result.base_start + '|' + result.base_end + '|' + flagged;
+  if (said !== state.coverageSaid) {
+    state.coverageSaid = said;
+    log('[INFO] Base observations cover ' + result.base_start + ' to ' +
+        result.base_end + '.');
+    if (flagged) {
+      log('[WARN] ' + flagged + ' flight(s) have exposures outside that window.');
+    }
   }
   renderFlights();
 }
@@ -2066,6 +2083,7 @@ function resetBelowBase() {
   state.roots = [];
   state.flights = [];
   state.coverage = {};
+  state.coverageSaid = null;
   state.tracks = {};
   state.crs = null;
   state.crsName = null;

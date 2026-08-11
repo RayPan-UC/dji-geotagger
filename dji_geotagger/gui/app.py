@@ -385,6 +385,29 @@ def _cached_rover_span(folder: Path) -> tuple[float, float] | None:
     return _rover_span_cache[key]
 
 
+# Keyed like the span cache, and for the same reason: check_coverage re-reads
+# every folder's MRK on each selection change, and mrk2df announces each one.
+# Fifteen folders toggled a dozen times is two hundred identical log lines.
+_mrk_cache: dict[tuple, pd.DataFrame] = {}
+
+
+def _cached_mrk(mrk: Path):
+    """`mrk2df`, remembered - the same files are re-read on every toggle."""
+    try:
+        key = (str(mrk), mrk.stat().st_mtime)
+    except OSError:
+        return mrk2df(str(mrk))
+
+    if key not in _mrk_cache:
+        _mrk_cache[key] = mrk2df(str(mrk))
+    return _mrk_cache[key]
+
+
+# The last span-merge announced, so a selection change that does not alter the
+# merge stays quiet instead of repeating itself.
+_last_join_log: tuple | None = None
+
+
 def _merged_rover_spans(paths: list[str]) -> list[tuple[float, float]]:
     """
     One set of continuous intervals for the whole selection.
@@ -416,7 +439,9 @@ def _merged_rover_spans(paths: list[str]) -> list[tuple[float, float]]:
         else:
             merged.append([start, end])
 
-    if len(merged) < len(spans):
+    global _last_join_log
+    if len(merged) < len(spans) and (len(spans), len(merged)) != _last_join_log:
+        _last_join_log = (len(spans), len(merged))
         logger.info("[INFO] %d rover observation file(s) join into %d "
                     "continuous span(s).", len(spans), len(merged))
     return [(a, b) for a, b in merged]
@@ -1449,6 +1474,7 @@ class Api:
         # from one that was never observed.
         rover_spans = _merged_rover_spans(selected if selected else paths)
         all_spans = _merged_rover_spans(paths) if selected else rover_spans
+        chosen = {str(Path(p)) for p in selected} if selected else None
 
         flights = []
         for path in paths:
@@ -1458,7 +1484,7 @@ class Api:
             if mrk is None:
                 continue
             try:
-                df = mrk2df(str(mrk))
+                df = _cached_mrk(mrk)
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("dji_geotagger").warning(
                     "[WARN] Could not read %s: %s", mrk.name, exc)
@@ -1477,14 +1503,24 @@ class Api:
             # exposures are routinely recorded in the next folder's file. Asked
             # per folder, the question answers "outside" for data that is
             # simply next door.
-            outside_rover = _outside_spans(stamps, rover_spans) \
-                if rover_spans else (outside_base & False)
+            #
+            # Which spans depends on whether this folder is in the run. A
+            # ticked one is judged against the ticked selection, because that
+            # is what geotag() will be handed. An unticked one is judged
+            # against everything on disk: its own observations exist, they are
+            # simply not part of this run, and reporting all 999 of its
+            # exposures as uncovered says the flight is ruined when all that
+            # has happened is that the user has not ticked it yet.
+            ticked = chosen is None or str(folder) in chosen
+            spans = rover_spans if ticked else all_spans
+            outside_rover = _outside_spans(stamps, spans) \
+                if spans else (outside_base & False)
 
             outside = outside_base | outside_rover
 
             # Of those, the ones another folder on disk does observe.
             recoverable = 0
-            if all_spans is not rover_spans and outside_rover.any():
+            if ticked and all_spans is not rover_spans and outside_rover.any():
                 recoverable = int(
                     (outside_rover & ~_outside_spans(stamps, all_spans)
                      & ~outside_base).sum())
@@ -1505,7 +1541,7 @@ class Api:
                 "outside_base": int(outside_base.sum()),
                 "outside_rover": int(outside_rover.sum()),
                 "recoverable": recoverable,
-                "has_rover": bool(rover_spans),
+                "has_rover": bool(spans),
                 "names": names[:_MAX_LISTED_NAMES] if names else None,
                 "truncated": bool(names and len(names) > _MAX_LISTED_NAMES),
             })
