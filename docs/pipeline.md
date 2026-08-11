@@ -414,16 +414,16 @@ The reported sigma is a **lower bound**. Not propagated:
 - **The coordinate transformation's own accuracy.** PROJ states one for the
   operation it chose; it is recorded in `df.attrs["transform"]` but not added
   to the covariance.
-- **The base antenna's phase-centre offset.** CSRS-PPP applies the ARP
-  eccentricity from the RINEX header — it echoes it back as an `ARP` line —
-  but it needs a calibrated antenna model to reduce from the phase centre to
-  the ARP. DJI publishes no IGS/NGS calibration for the D-RTK 3, so the `.sum`
-  reports `ANT NOT FOUND` and no phase-centre correction is applied. The
-  vertical offset between the mean phase centre and the ARP is a few
-  centimetres for a geodetic antenna, it is frequency-dependent, and it does
-  **not** cancel differentially because the base and rover antennas differ.
-  Treat the base height as carrying an unmodelled systematic term of that
-  order — harmless for relative work, visible against external control.
+- **The antenna phase centre.** GNSS measures to the antenna's *electrical*
+  phase centre, and reducing that to a physical point takes a calibration.
+  DJI publishes a mechanical height — the D-RTK 3's phase centre sits 10 cm
+  above the top of the survey pole — which is enough to keep the height
+  bookkeeping straight and is worth applying. It publishes no ANTEX model, so
+  CSRS-PPP reports `ANT NOT FOUND` and neither it nor RTKLIB applies a
+  phase-centre correction. What is left is systematic, almost entirely
+  vertical, and does **not** cancel between base and rover, because the two
+  antennas are different hardware. Harmless for relative work; visible as a
+  constant against external control.
 - **Attitude.** Carries no uncertainty at all. DJI publishes an *Angular
   Vibration Range* of ±0.01° for the Zenmuse P1 gimbal, which is how still it
   holds, **not** how well it knows where it is pointing; no absolute attitude
