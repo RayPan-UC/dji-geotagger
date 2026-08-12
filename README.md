@@ -144,6 +144,19 @@ Both ends are handled — the RINEX header and RTKLIB's own antenna delta — so
 the two never disagree. (Before 2.1.1 the value was silently discarded and the
 result always referred to the ARP.)
 
+**A DJI base solved by a third-party PPP service carries an uncorrected
+antenna offset.** No IGS/NGS calibration is published for the D-RTK 3, so
+CSRS-PPP reports `ANT NOT FOUND` and applies no phase-centre correction;
+RTKLIB does not either. What remains is systematic, almost entirely vertical,
+and does **not** cancel between base and rover, because the two antennas are
+different hardware. **It is not included in the reported sigma.** Relative
+work is unaffected; absolute heights should be checked against independent
+control before they are relied on.
+
+DJI does publish a mechanical figure — the D-RTK 3's phase centre sits 10 cm
+above the top of the survey pole — worth applying to the height bookkeeping
+above, though it is not a substitute for a calibration.
+
 ```python
 # Submit to CSRS-PPP and fetch the .sum back (no account needed)
 dgt.resolve_base_position(mode="online", base_obs=base_obs,
@@ -218,7 +231,7 @@ intermediate columns.
 | Column | Description |
 |--------|-------------|
 | `FileName` | Image filename |
-| `UTCAtExposure` | UTC datetime of exposure |
+| `UTCAtExposure` | DJI's XMP field, passed through — holds **GPS time**, 18 s ahead of UTC in 2025 ([why](docs/output.md#utcatexposure-holds-gps-time-not-utc)) |
 | `coord_sys`, `epoch` | Reference frame and epoch |
 | `cam_lat`, `cam_lon`, `cam_h` | Camera centre, **ellipsoidal** height (metres) |
 | `cam_X`, `cam_Y`, `cam_Z` | Camera centre ECEF (metres) |
@@ -244,6 +257,10 @@ target frame, and a projected target adds two more:
 
 Skipped flights are listed in `geotag_df.attrs["failed_flights"]`.
 
+Where each column comes from — and which are DJI's fields passed through
+rather than computed here — is in
+**[What is in geotag.csv](docs/output.md)**.
+
 `sigma_E/N/U` are **1σ**; the desktop front end offers 1σ / 95% / 99% and
 renames the columns when it rescales them, so `sigma_E_95` can never be
 mistaken for `sigma_E`. Set `base_error_propagation_on=False` for rover-only
@@ -264,6 +281,9 @@ measurements that back them:
 - **[Camera attitude](docs/attitude.md)** — where yaw, pitch and roll come
   from, what the `DGT_*` normalization changes, and how the rotation sequence
   was determined from DJI's own data rather than assumed.
+- **[What is in geotag.csv](docs/output.md)** — the provenance of every
+  column: what is computed here, what is DJI's own field passed through, and
+  why `UTCAtExposure` is not UTC.
 
 ## Key Functions
 
@@ -355,6 +375,5 @@ This project is licensed under the BSD 2-Clause (see LICENSE for details).
 
 ## Acknowledgments
 
-- Developed at the University of Calgary, Applied Geospatial Research Group ([appliedgrg.ca](https://www.appliedgrg.ca))
-- Inspired by real-world field workflows involving DJI Matrice 350 RTK + Zenmuse P1, Hemisphere base stations, and CSRS-PPP post-processing
+- Grew out of fieldwork with the Applied Geospatial Research Group, University of Calgary ([appliedgrg.ca](https://www.appliedgrg.ca)) — DJI Matrice 350 RTK + Zenmuse P1, Hemisphere base stations, CSRS-PPP post-processing
 - RTKLIB by Tomoji Takasu

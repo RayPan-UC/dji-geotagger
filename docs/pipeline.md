@@ -414,16 +414,11 @@ The reported sigma is a **lower bound**. Not propagated:
 - **The coordinate transformation's own accuracy.** PROJ states one for the
   operation it chose; it is recorded in `df.attrs["transform"]` but not added
   to the covariance.
-- **The antenna phase centre.** GNSS measures to the antenna's *electrical*
-  phase centre, and reducing that to a physical point takes a calibration.
-  DJI publishes a mechanical height — the D-RTK 3's phase centre sits 10 cm
-  above the top of the survey pole — which is enough to keep the height
-  bookkeeping straight and is worth applying. It publishes no ANTEX model, so
-  CSRS-PPP reports `ANT NOT FOUND` and neither it nor RTKLIB applies a
-  phase-centre correction. What is left is systematic, almost entirely
-  vertical, and does **not** cancel between base and rover, because the two
-  antennas are different hardware. Harmless for relative work; visible as a
-  constant against external control.
+- **The antenna phase centre.** No ANTEX calibration is published for the
+  D-RTK 3, so neither CSRS-PPP nor RTKLIB corrects for it. The residual is
+  systematic, almost entirely vertical, and does not cancel between base and
+  rover because the antennas differ — the largest term in this list. See the
+  note under [Base Station Position](../README.md#base-station-position).
 - **Attitude.** Carries no uncertainty at all. DJI publishes an *Angular
   Vibration Range* of ±0.01° for the Zenmuse P1 gimbal, which is how still it
   holds, **not** how well it knows where it is pointing; no absolute attitude
