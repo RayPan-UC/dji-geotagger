@@ -146,8 +146,7 @@ because D points opposite to U — gives what
 [`NED2ECEF_vec()`](../dji_geotagger/tools/tools.py) implements:
 
 $$
-\begin{bmatrix} \Delta X \\\\ \Delta Y \\\\ \Delta Z \end{bmatrix}
-=
+\begin{bmatrix} \Delta X \\\\ \Delta Y \\\\ \Delta Z \end{bmatrix} =
 \begin{bmatrix}
 -\sin\varphi\cos\lambda & -\sin\lambda & -\cos\varphi\cos\lambda \\\\
 -\sin\varphi\sin\lambda & \cos\lambda & -\cos\varphi\sin\lambda \\\\
