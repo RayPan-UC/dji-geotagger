@@ -302,31 +302,47 @@ input.narrow-wide { flex: 0 0 150px; }
 
 .help:hover, .help:focus { background: var(--accent); outline: none; }
 
-.help::after {
-  content: attr(data-tip);
+/* Real nodes rather than `content: attr(data-tip)`, which can only carry one
+   run of plain text. A tip that makes four separate claims reads as a wall
+   until each gets a heading - the same shape the About panel uses. */
+.help .tip {
   position: absolute;
   top: calc(100% + 7px);
   left: -6px;
   z-index: 80;
-  width: 250px;
-  padding: 8px 10px;
+  /* Wide enough for a sixty-character measure at this size. Narrower and the
+     longer tips break every second word; wider and the eye loses the line. */
+  width: 300px;
+  padding: 10px 12px 11px;
   border-radius: 5px;
   background: #2b3038;
   color: #eef1f4;
   font-size: 11px;
   font-weight: 400;
-  line-height: 1.6;
+  line-height: 1.55;
   text-align: left;
-  /* Newlines in data-tip are honoured, so a caveat with three distinct claims
-     reads as three lines instead of one wrapped paragraph. */
-  white-space: pre-line;
+  cursor: default;
   box-shadow: 0 3px 12px rgba(0, 0, 0, .26);
   opacity: 0;
   visibility: hidden;
   transition: opacity .12s;
 }
 
-.help:hover::after, .help:focus::after { opacity: 1; visibility: visible; }
+.help:hover .tip, .help:focus .tip { opacity: 1; visibility: visible; }
+
+.help .tip b {
+  display: block;
+  margin: 10px 0 1px;
+  color: #98a3b0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.help .tip b:first-child { margin-top: 0; }
+
+.help .tip span { display: block; }
 
 /* Numbers to be compared down a column, so they are tabular and right-aligned;
    the row label is not. */

@@ -90,10 +90,6 @@ _MAX_MAP_POINTS = 6000
 # GPS week zero.
 _GPS_EPOCH = datetime(1980, 1, 6)
 
-# Shipped alongside the compiled binaries, as BSD-2-Clause asks.
-_RTKLIB_LICENSE = (Path(__file__).resolve().parents[1]
-                   / "tools" / "RTKLIB" / "bin" / "LICENSE.txt")
-
 # Remembered preferences. Beside the user's own profile rather than in the
 # package, so an upgrade or a reinstall does not discard them.
 _SETTINGS_FILE = Path.home() / ".dji_geotagger" / "gui_settings.json"
@@ -900,20 +896,22 @@ class Api:
             version = (stamp.read_text(encoding="utf-8").strip()
                        if stamp.exists() else "development")
 
-        rtklib = _RTKLIB_LICENSE
         return {
             "version": version,
             "licence": "BSD 2-Clause  ·  Copyright (c) 2025, Ray Pan",
+            # No file paths. They resolve differently on every machine and in
+            # a frozen build, and an absolute one puts the operator's account
+            # name on screen for anyone they send a screenshot to. The notice
+            # is what the licence asks travel with the binary; the texts sit
+            # beside the files themselves.
             "third_party": [
                 {"name": "RTKLIB 2.4.3",
                  "who": "Copyright (c) 2007-2020, T. Takasu",
-                 "licence": "BSD 2-Clause",
-                 "where": str(rtklib) if rtklib.exists() else None},
+                 "licence": "BSD 2-Clause"},
                 {"name": "Leaflet 1.7.1",
                  "who": "Copyright (c) 2010-2019, Vladimir Agafonkin; "
                         "(c) 2010-2011, CloudMade",
-                 "licence": "BSD 2-Clause",
-                 "where": str(_WEB_DIR / "vendor" / "leaflet.js")},
+                 "licence": "BSD 2-Clause"},
             ],
         }
 

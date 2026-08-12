@@ -880,6 +880,31 @@ function openModal(title, bodyNodes) {
   $('#modal').classList.remove('hidden');
 }
 
+/* Fill a help icon's tooltip from `[heading, body]` pairs.
+
+   Real nodes, because the tooltip used to be `content: attr(data-tip)` and a
+   pseudo-element can only hold one run of plain text - four claims about the
+   antenna height ran together into a paragraph nobody reads to the end of.
+   An empty heading gives an unlabelled closing line.
+
+   Text, never HTML: some of these carry a computed percentage. */
+function setTip(icon, sections) {
+  const box = document.createElement('span');
+  box.className = 'tip';
+  sections.forEach(([heading, body]) => {
+    if (heading) {
+      const h = document.createElement('b');
+      h.textContent = heading;
+      box.appendChild(h);
+    }
+    const p = document.createElement('span');
+    p.textContent = body;
+    box.appendChild(p);
+  });
+  icon.querySelectorAll('.tip').forEach((old) => old.remove());
+  icon.appendChild(box);
+}
+
 function para(text, bold) {
   const p = document.createElement('p');
   p.style.margin = '0 0 6px';
@@ -1208,10 +1233,7 @@ async function showAbout() {
   nodes.push(head('Third-party components'));
   info.third_party.forEach((item) => {
     nodes.push(para2('<b>' + item.name + '</b> &mdash; ' + item.licence
-      + '<br><span style="color:var(--ink-faint)">' + item.who + '</span>'
-      + (item.where ? '<br><span style="color:var(--ink-faint);'
-                      + 'font-family:Consolas,monospace;font-size:10px">'
-                      + item.where + '</span>' : '')));
+      + '<br><span style="color:var(--ink-faint)">' + item.who + '</span>'));
   });
 
   openModal('About', nodes);
@@ -2306,6 +2328,18 @@ function showConfidenceTable() {
     'the 1-D row is the one that applies to them. Reading a 2-D figure per ' +
     'axis overstates each axis by 25% at 95%.'));
 
+  /* Rescaling by k answers "how confident", which invites the number to be
+     read as the whole error budget. It is not, and the largest thing missing
+     from it is not small - so it is said here, where the number is set. */
+  const limit = para('Whatever k you choose, the reported sigma is a lower '
+    + 'bound. The largest term left out is the antenna phase centre: DJI '
+    + 'publishes no calibration for the D-RTK 3, so neither CSRS-PPP nor '
+    + 'RTKLIB corrects for it. It is systematic and almost entirely '
+    + 'vertical. Relative work is unaffected; check absolute heights against '
+    + 'independent control before delivering them.');
+  limit.style.color = 'var(--warn)';
+  nodes.push(limit);
+
   const table = document.createElement('table');
   table.className = 'k-table';
   const head = table.insertRow();
@@ -2342,18 +2376,24 @@ document.querySelectorAll('.help').forEach((icon) => {
 /* Zero is the default, and deliberately so - see the tooltip. Written once
    here rather than in the markup so the reasoning sits with the code that
    decides it. */
-$('#help-antenna').dataset.tip =
-  'Vertical distance from the ground mark to the antenna reference point.\n' +
-  '\n' +
-  'It is subtracted by CSRS-PPP and added back for the PPK solve, so the\n' +
-  'two cancel and camera positions are unaffected either way.\n' +
-  '\n' +
-  'Leave it at 0 and the solved base coordinate describes the antenna\n' +
-  'itself - fewer steps to get wrong, but that point cannot be used as a\n' +
-  'control point without adding the height back by hand.\n' +
-  '\n' +
-  'Enter the measured height and the coordinate describes the ground mark,\n' +
-  'which is what a control point has to be.';
+setTip($('#help-antenna'), [
+  ['What it is',
+   'Vertical distance from the ground mark to the antenna reference point.'],
+  ['Why it cancels',
+   'CSRS-PPP subtracts it and the PPK solve adds it back, so camera '
+   + 'positions come out the same either way.'],
+  ['Which to enter',
+   'Zero, and the solved base coordinate describes the antenna itself - '
+   + 'fewer steps to get wrong, but not a control point until the height is '
+   + 'added back by hand. The measured height, and it describes the ground '
+   + 'mark, which is what a control point has to be.'],
+  ['Not corrected either way',
+   'DJI publishes no calibration for the D-RTK 3, so the .sum reports ANT '
+   + 'NOT FOUND and no phase-centre correction is applied at either end. '
+   + 'What is left is systematic, almost entirely vertical, and is not in '
+   + 'the reported sigma - check absolute heights against independent '
+   + 'control before delivering them.'],
+]);
 
 function updateConfidenceHelp() {
   const pct = coverage(currentK()).map((p) => (p * 100).toFixed(1) + '%');
@@ -2362,10 +2402,11 @@ function updateConfidenceHelp() {
      common house convention and 95.4% is what it actually delivers. */
   $('#confidence-hint').textContent = pct[0] + ' per component';
 
-  $('#help-confidence').dataset.tip =
-    'Per component: covers ' + pct[0] + ' on each axis.\n' +
-    'Only ' + pct[1] + ' of a horizontal ellipse — not a radius.\n' +
-    'Click for the table of usual values.';
+  setTip($('#help-confidence'), [
+    ['Per component', 'Covers ' + pct[0] + ' on each axis.'],
+    ['Horizontally', 'Only ' + pct[1] + ' of an error ellipse - not a radius.'],
+    ['', 'Click for the table of usual values, and what the sigma leaves out.'],
+  ]);
 }
 
 $('#help-confidence').addEventListener('click', showConfidenceTable);
