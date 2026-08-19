@@ -180,40 +180,20 @@ $R$ is orthonormal, so the transpose is the inverse.
 
 The MRK records exposures; the folder holds photos. The join is on **the
 instant each was taken** — the MRK carries GPS week and time of week, and DJI
-writes the same instant into the image's `UTCAtExposure` XMP field. Measured
-across 1,998 exposures from a P1 and an L2, the two agree to a microsecond.
+writes the same instant into the image's `UTCAtExposure` XMP field. That is
+what the two files genuinely have in common: it survives renamed files, a
+folder that does not begin at `0001`, and a count that differs on the two
+sides.
 
-Time is what the two files genuinely have in common. It survives renamed
-files, a folder that does not begin at `0001`, and a count that does not
-match on both sides.
+The tolerance is a fraction of the flight's own exposure interval, so it fits
+a fast survey line and a slow inspection run alike. A photo with no record
+inside it is dropped and counted, never attached to whichever was nearest.
 
-**The tolerance comes from the flight, not from a constant.** A photo paired
-with the wrong record sits a whole exposure interval away from its own
-timestamp, so anything under half an interval is unambiguous; the limit is
-set at 40% of the median interval, floored at 0.05 s and capped at 2 s. On
-the reference survey that is 0.238 s for a P1 shooting every 0.595 s and
-0.355 s for an L2 every 0.887 s. A fixed figure cannot serve both a fast
-survey line and a slow inspection run: tight enough for the first is a false
-alarm on the second, loose enough for the second lets an off-by-one through
-the first. A photo with no record inside the tolerance is dropped and
-counted, never attached to whichever was nearest.
-
-**DJI's exposure number is kept as a witness.** It takes no part in the
-pairing, but the file name carries DJI's own count for the same exposure and
-it is exact, so it is compared afterwards. If a camera's timestamps were ever
-offset against the MRK, every photo would be paired confidently with a record
-some whole number of exposures away — and the numbers would disagree at once.
-Shifting the timestamps of a 999-photo flight by two exposures, as a test,
-drops 143 photos outside the tolerance and flags all 856 that remain.
-
-Two fallbacks, in order: images with no readable timestamp are paired on that
-exposure number instead; images with neither are refused. The older behaviour
-— pairing the *n*th photo with the *n*th record — is gone, because it always
-appears to succeed. It assumes the folder starts at `0001`, and two here do
-not: an L2 folder begins at `0003`, and a P1 folder left by an aborted flight
-held only `0002`. In the first, every photo took the exposure two shutter
-intervals away, several metres of flying, and the overhang at the end was
-dropped; in the second the single photo matched nothing at all.
+DJI's exposure number takes no part in the pairing, but the file name carries
+it and it is exact, so it is checked afterwards. A camera clock offset from
+the MRK would pair every photo confidently with a record some whole number of
+exposures away, and the numbers would disagree at once. Images with no
+readable timestamp fall back to that number; images with neither are refused.
 
 **The rover log is named by payload.** A P1 folder holds one `*_PPKRAW.bin`;
 an L2 folder holds one `*.RTK` instead, among a dozen sidecars of its own.
