@@ -17,7 +17,7 @@ def compute_camera_position(
     Compute corrected camera center positions for each exposure epoch.
 
     This function builds an exposure-level table by:
-      1) `match_mrk_xml`              : merge MRK records and image metadata by sequence index (seq)
+      1) `match_mrk_xml`              : merge MRK records and image metadata by exposure time
       2) `interpolate_pos_at_exposure`: interpolate rover PPK antenna ECEF positions to exposure epochs
       3) `apply_gimbal_correction`    : apply lever-arm (ECEF) to shift antenna phase center -> camera center
       4) `format_output`             : reshape output columns (e.g., split ENU sigma) and optionally filter columns
@@ -78,42 +78,178 @@ def _sequence_from_names(names: pd.Series) -> pd.Series:
     together they pair the two tables without assuming either is complete or
     starts at one.
 
-    Returns 1-based positions instead if any name does not carry the field,
-    which is the older behaviour and is right for a folder of renamed images.
+    Returns None if any name does not carry the field, leaving the caller to
+    pair on the exposure time instead - which is the only thing left to go on
+    once the names have been changed.
     """
     numbers = names.str.extract(r"_(\d{14})_(\d{4})(?:\D|$)")[1]
     if numbers.isna().any():
-        logger.info(
-            "Image names carry no DJI exposure number; pairing with the MRK "
-            "by sorted position instead.")
-        return pd.Series(range(1, len(names) + 1), index=names.index)
+        return None
     return numbers.astype(int)
+
+
+# The check below allows this share of one exposure interval before it calls a
+# pairing wrong. Off by a single record puts a photo a whole interval from its
+# MRK time, so anything under half is unambiguous; the rest of the margin
+# absorbs whatever slop another payload's XMP may carry.
+#
+# Measured here across 1,998 exposures from a P1 and an L2, the XMP timestamp
+# and the MRK agree to a microsecond - DJI writes the same instant into both.
+# That is one aircraft and one firmware generation, which is why the tolerance
+# is derived from the data rather than fixed at what this hardware happens to
+# achieve.
+_EXPOSURE_TOLERANCE_SHARE = 0.4
+
+# Floor and ceiling, for a burst so fast that 40% of it is noise, and for an
+# interval so long that 40% of it would let a real mispairing through.
+_EXPOSURE_TOLERANCE_MIN_S = 0.05
+_EXPOSURE_TOLERANCE_MAX_S = 2.0
+
+
+def _mrk_seconds(df: pd.DataFrame) -> pd.Series:
+    """GPS week and time of week as one continuous scale."""
+    return (df["GPS_week"].astype(float) * 604800.0
+            + df["GPS_time"].astype(float))
+
+
+def _xmp_seconds(img_df: pd.DataFrame) -> pd.Series | None:
+    """
+    The images' own exposure instants, on the same scale as `_mrk_seconds`.
+
+    DJI's ``UTCAtExposure`` XMP field holds GPS time despite its name - it
+    equals the MRK's week and time of week exactly, to a microsecond - so it
+    lands on that scale with no leap second applied and nothing to convert.
+    See `docs/output.md`.
+
+    Returns None when the field is absent or unreadable, which costs the
+    cross-check and nothing else.
+    """
+    if "UTCAtExposure" not in img_df.columns:
+        return None
+    stamps = pd.to_datetime(img_df["UTCAtExposure"], errors="coerce")
+    if stamps.isna().any():
+        return None
+    return (stamps - pd.Timestamp("1980-01-06")).dt.total_seconds()
+
+
+def _match_on_time(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pair each photo with the MRK record fired at the same instant.
+
+    Time is what the two files genuinely have in common: the MRK carries GPS
+    week and time of week, and DJI writes the same instant into the image's
+    ``UTCAtExposure`` XMP field. Neither has to be complete, numbered from
+    one, or still under its original file name.
+
+    Nearest match within `_exposure_tolerance`, so a photo whose instant sits
+    between two records - or outside the MRK altogether - is dropped rather
+    than attached to whichever was closest.
+
+    Falls back to DJI's exposure number when the images carry no readable
+    timestamp, which is the only other thing the two files share.
+    """
+    times = _xmp_seconds(img_df)
+    if times is None:
+        numbers = _sequence_from_names(img_df["FileName"])
+        if numbers is None:
+            raise ValueError(
+                "[ERROR] The images carry neither a readable UTCAtExposure "
+                "nor a DJI exposure number in their file names, so they "
+                "cannot be paired with the MRK.")
+        logger.info("No readable image timestamps; pairing with the MRK by "
+                    "DJI exposure number instead.")
+        img_df = img_df.assign(seq=numbers)
+        return pd.merge(mrk_df, img_df, on="seq", how="inner",
+                        suffixes=("_mrk", "_xml"))
+
+    left = img_df.assign(_t=times.values).sort_values("_t")
+    right = mrk_df.assign(_t=_mrk_seconds(mrk_df).values).sort_values("_t")
+    tolerance = _exposure_tolerance(right["_t"])
+
+    paired = pd.merge_asof(left, right, on="_t", direction="nearest",
+                           tolerance=tolerance, suffixes=("_xml", "_mrk"))
+    lost = int(paired["seq"].isna().sum()) if "seq" in paired else 0
+    if lost:
+        logger.warning(
+            "[WARN] %d of %d photos have no MRK record within %.3f s of their "
+            "own timestamp and were dropped.", lost, len(paired), tolerance)
+    return paired.dropna(subset=["seq"]).drop(columns="_t").reset_index(
+        drop=True)
+
+
+def _check_pairing_numbers(paired: pd.DataFrame) -> None:
+    """
+    Confirm DJI's own exposure numbers agree with what the times paired up.
+
+    Time is the physical truth and is what the join uses, but it is matched
+    within a tolerance, so a payload whose XMP is offset by a constant would
+    be paired confidently and wrongly - every photo shifted by the same
+    number of records. The file name carries DJI's own count for the same
+    exposure, and it is exact, so the two disagree the moment that happens.
+    """
+    if "seq" not in paired.columns or "FileName" not in paired.columns:
+        return
+    numbers = _sequence_from_names(paired["FileName"])
+    if numbers is None:
+        return                      # renamed images: nothing to check against
+
+    off = numbers.values != paired["seq"].values
+    if not off.any():
+        return
+
+    names = paired.loc[off, "FileName"].head(3).tolist()
+    logger.warning(
+        "[WARN] %d of %d photos were paired by time with an MRK record whose "
+        "exposure number does not match their own: %s. If the whole flight is "
+        "affected, the camera's timestamps are offset against the MRK and the "
+        "positions will be shifted by whole exposures.",
+        int(off.sum()), len(paired), ", ".join(names))
+
+
+def _exposure_tolerance(stamps: pd.Series) -> float:
+    """
+    How far a photo's timestamp may sit from its MRK record, from the interval
+    the flight was actually shot at.
+
+    A fixed figure cannot serve both a 0.6 s survey interval and a slow
+    inspection run: tight enough for the first is a false alarm on the second,
+    loose enough for the second lets an off-by-one through the first.
+    """
+    intervals = np.diff(np.sort(stamps.values))
+    intervals = intervals[intervals > 0]
+    if intervals.size == 0:
+        return _EXPOSURE_TOLERANCE_MAX_S
+    return float(np.clip(_EXPOSURE_TOLERANCE_SHARE * np.median(intervals),
+                         _EXPOSURE_TOLERANCE_MIN_S,
+                         _EXPOSURE_TOLERANCE_MAX_S))
 
 
 def match_mrk_xml(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge MRK records with image metadata by DJI exposure sequence index (`seq`).
+    Merge MRK records with image metadata by the instant each was exposed.
 
     Notes
     -----
-    - DJI MRK `seq` is 1-based, and matches the number DJI puts in the file
-      name: ``DJI_20250723124211_0001_D.JPG`` is exposure 1.
-    - The number is read from the file name, not from the sorted position.
-      Position works only when a folder's first photo is 0001, which is the
-      usual case but not a rule. An L2 folder measured here begins at 0003,
-      and a P1 folder left behind by an aborted flight held only 0002 - in
-      both, position-based numbering pairs every image with the wrong MRK
-      record, silently, and drops the overhang at the end.
-    - Falls back to sorted position when the names carry no such number, so
-      non-DJI naming keeps working.
-    - Uses an inner join; unmatched rows on either side are dropped.
+    - The MRK carries GPS week and time of week; DJI writes the same instant
+      into the image's ``UTCAtExposure`` XMP field, to a microsecond across
+      the flights measured here. Time survives renamed files, a folder that
+      does not start at 0001, and a count that differs on the two sides.
+    - Matched nearest within `_exposure_tolerance`, which is derived from the
+      flight's own exposure interval. A photo with no record inside it is
+      dropped and counted, not attached to whichever was closest.
+    - DJI's exposure number takes no part in the pairing but is compared
+      afterwards by `_check_pairing_numbers`, as an exact witness against a
+      camera clock offset from the MRK.
+    - Two fallbacks: images with no readable timestamp are paired on that
+      exposure number; images with neither are refused. Sorted position is
+      not one of them - it always appears to succeed.
 
     Parameters
     ----------
     mrk_df : pd.DataFrame
-        Must contain `seq`.
+        Must contain `seq`, `GPS_week` and `GPS_time`.
     img_df : pd.DataFrame
-        Must contain `FileName`. Will be sorted and assigned a new `seq` column.
+        Must contain `FileName`, and `UTCAtExposure` for the usual path.
 
     Returns
     -------
@@ -121,10 +257,8 @@ def match_mrk_xml(mrk_df: pd.DataFrame, img_df: pd.DataFrame) -> pd.DataFrame:
         Merged exposure metadata table with MRK + image fields.
     """
     img_df = img_df.sort_values("FileName").reset_index(drop=True)
-    img_df["seq"] = _sequence_from_names(img_df["FileName"])
-
-    # merge
-    exposure_meta_df = pd.merge(mrk_df, img_df, on="seq", how="inner", suffixes=("_mrk", "_xml"))
+    exposure_meta_df = _match_on_time(mrk_df, img_df)
+    _check_pairing_numbers(exposure_meta_df)
 
     # check
     n_mrk = len(mrk_df)
